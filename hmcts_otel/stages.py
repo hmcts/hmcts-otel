@@ -79,6 +79,14 @@ class StageHandle:
         self.error_code = self._code(error_code)
         self.outcome = Outcome.FAILURE
 
+    def error(self, error_code: str) -> None:
+        """Mark a server-side or dependency failure (storage, external service) with a
+        controlled code. Unlike ``fail``, the stage counts as an error (span status
+        ERROR, outcome ``error``). The code is kept if an exception is then raised, so
+        it is not replaced by ``unhandled.<Type>``."""
+        self.error_code = self._code(error_code)
+        self.outcome = Outcome.ERROR
+
     def cancel(self, error_code: str | None = None) -> None:
         if error_code is not None:
             self.error_code = self._code(error_code)
