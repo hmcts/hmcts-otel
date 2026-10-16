@@ -1,0 +1,36 @@
+version: 2
+
+updates:
+  # ===================
+  # Python (pip / uv)
+  # ===================
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    target-branch: "main"
+    open-pull-requests-limit: 10
+    groups:
+      python-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # ===================
+  # GitHub Actions
+  # ===================
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    target-branch: "main"
+    open-pull-requests-limit: 10
+    groups:
+      github-actions-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
