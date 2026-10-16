@@ -150,6 +150,11 @@ def stage(
             _finish_safely(handle, span, time.perf_counter() - start, None, business_error=True)
             raise
         except BaseException as exc:
+            if handle.outcome is Outcome.FAILURE:
+                # fail(code) then raise (e.g. an HTTPException for a validation error):
+                # a handled failure, not an unexpected error.
+                _finish_safely(handle, span, time.perf_counter() - start, None, business_error=True)
+                raise
             handle.outcome = Outcome.ERROR
             handle.error_code = handle.error_code or f"unhandled.{type(exc).__name__}"[:64]
             _finish_safely(handle, span, time.perf_counter() - start, exc, business_error=True)

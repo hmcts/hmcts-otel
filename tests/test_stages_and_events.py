@@ -124,3 +124,18 @@ def test_journey_rejects_business_identifiers(tel: TelemetryCapture) -> None:
     with pytest.raises(ValueError):
         with journey("recording.job", "PA/50123/2024"):
             pass
+
+
+def test_fail_then_raise_is_a_handled_failure(tel: TelemetryCapture) -> None:
+    class HTTPError(Exception):
+        pass
+
+    with pytest.raises(HTTPError):
+        with stage("upload") as s:
+            s.fail("upload.too_large")
+            raise HTTPError("413")
+    failed = tel.events("upload.failed")[0]
+    assert failed[c.OUTCOME] == "failure" and failed[c.ERROR_CODE] == "upload.too_large"
+    (span,) = tel.finished_spans()
+    assert span.status.status_code is StatusCode.UNSET
+    assert span.events == ()
