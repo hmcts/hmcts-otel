@@ -21,7 +21,7 @@ from hmcts_otel.propagation import background_span, capture_trace_context, links
 from hmcts_otel.redaction import RedactionRule, Redactor, default_redactor, redact
 from hmcts_otel.schema import AttributeSpec, EventSpec, TelemetrySchema, default_schema
 from hmcts_otel.settings import TelemetrySettings
-from hmcts_otel.stages import StageHandle, stage
+from hmcts_otel.stages import StageHandle, client_failure_code, stage
 
 try:
     __version__ = version("hmcts-otel")
@@ -42,6 +42,7 @@ __all__ = [
     "TelemetrySchema",
     "TelemetrySettings",
     "capture_trace_context",
+    "client_failure_code",
     "conventions",
     "current_journey",
     "default_redactor",

@@ -41,5 +41,5 @@ Journey IDs are never metric dimensions.
 | `hmcts.journey.parent_id` | str | matches `[A-Za-z0-9_-]{1,64}` | Parent journey, e.g. the batch a file belongs to. |
 | `hmcts.journey.type` | str | matches `[a-z0-9][a-z0-9_.-]{0,63}` | Kind of journey, e.g. upload.job or user.session. |
 | `hmcts.outcome` | str | one of `cancelled`, `error`, `failure`, `success` | Stage outcome. |
-| `hmcts.request.id` | str | matches `[A-Za-z0-9._-]{1,64}` | Request correlation ID. |
+| `hmcts.request.id` | str | matches `[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32}` | Request correlation ID (UUID or 32 hex). |
 | `hmcts.stage` | str | matches `[a-z][a-z0-9_.]{0,63}` | Stage name. |
