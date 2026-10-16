@@ -1,0 +1,132 @@
+name: Build
+
+# Validates the package builds on every PR, and publishes the wheel/sdist to the
+# shared HMCTS Azure DevOps Artifacts feed (hmcts-lib) — the same feed the Java
+# libraries publish to (mirrors api-cp-caseadmin-case-urn-mapper's ci-draft /
+# ci-released Gradle publish, but for a Python artefact via twine).
+#
+#   push to main        -> draft candidate version   (artefact-version draft)
+#   published release   -> release version           (artefact-version release)
+#
+# Auth is basic auth to Azure Artifacts using the org secrets
+# AZURE_DEVOPS_ARTIFACT_USERNAME / AZURE_DEVOPS_ARTIFACT_TOKEN (same as Gradle).
+
+on:
+  pull_request:
+    branches: [main]
+    # Skip docs/config-only changes — packaging is unaffected.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.claude/**'
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build sdist + wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Build package
+        run: uv build
+
+      - name: Check package metadata (twine)
+        run: uvx twine check dist/*
+
+      - name: Upload build artefacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+  # Compute the artefact version the HMCTS-standard way (same action the Java
+  # libraries use): a draft version on push, a release version on a Release.
+  artefact-version:
+    name: Artefact Version
+    if: github.event_name == 'push' || github.event_name == 'release'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.pick.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # full history for accurate versioning
+
+      - name: Generate artefact version
+        id: artefact
+        uses: hmcts/artefact-version-action@v1
+        with:
+          release: ${{ github.event_name == 'release' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Select draft/release version
+        id: pick
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "version=${{ steps.artefact.outputs.release_version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${{ steps.artefact.outputs.draft_version }}" >> "$GITHUB_OUTPUT"
+          fi
+
+  publish:
+    name: Publish to Azure Artifacts (hmcts-lib)
+    needs: [build, artefact-version]
+    if: github.event_name == 'push' || github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Set the artefact version and build
+        env:
+          RAW_VERSION: ${{ needs.artefact-version.outputs.version }}
+        run: |
+          # Draft builds (push to main) get a PEP 440 dev release + local SHA,
+          # "<base>.dev<run_number>+<sha>" (e.g. 0.2.0.dev47+46dfd2f) — the same
+          # form setuptools-scm / from-source builds use. The .dev<n> gives
+          # correct ordering across drafts; the +<sha> is the commit (a hex SHA
+          # is only PEP 440-legal in the "+" local segment). A published release
+          # uses the clean release version as-is (no +local).
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="$RAW_VERSION"
+          else
+            BASE="${RAW_VERSION%%-*}"          # e.g. 0.2.0
+            SHA="${RAW_VERSION#*-}"            # e.g. 46dfd2f
+            if [ "$SHA" = "$RAW_VERSION" ]; then
+              VERSION="${BASE}.dev${{ github.run_number }}"          # no SHA in source version
+            else
+              VERSION="${BASE}.dev${{ github.run_number }}+${SHA}"
+            fi
+          fi
+          echo "Publishing hmcts-otel version: $VERSION"
+          sed -i.bak -E "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
+          rm -f pyproject.toml.bak
+          uv build
+
+      - name: Publish to the hmcts-lib PyPI feed
+        env:
+          # Same Azure DevOps Artifacts feed + credentials as the Gradle publish.
+          TWINE_USERNAME: ${{ secrets.AZURE_DEVOPS_ARTIFACT_USERNAME }}
+          TWINE_PASSWORD: ${{ secrets.AZURE_DEVOPS_ARTIFACT_TOKEN }}
+          TWINE_REPOSITORY_URL: https://pkgs.dev.azure.com/hmcts/Artifacts/_packaging/hmcts-lib/pypi/upload/
+        run: uvx twine upload --non-interactive dist/*
