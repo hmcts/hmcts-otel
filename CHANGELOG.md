@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [0.1.0] - unreleased
 
+### Outcome classification
+- `StageHandle.error(code)` for server-side and dependency failures (outcome
+  `error`, code kept if an exception follows).
+- A FastAPI/Starlette `HTTPException` with a 4xx status leaving a stage is a handled
+  failure (`http.<status>`), wherever it was raised. `client_failure_code(exc)` exposes
+  the rule for job-level outcomes.
+
 ### Security and robustness (principal review)
 - Telemetry never replaces or masks the application's exception; internal failures
   are counted on `hmcts.telemetry.errors`. Misuse raises only in strict mode

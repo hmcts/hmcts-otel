@@ -14,6 +14,7 @@ application's own exception (see ``_guard``).
 from __future__ import annotations
 
 import asyncio
+import sys
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
@@ -93,6 +94,30 @@ class StageHandle:
         self.outcome = Outcome.CANCELLED
 
 
+_CLIENT_ERROR = range(400, 500)
+
+
+def client_failure_code(exc: BaseException) -> str | None:
+    """``http.<status>`` when ``exc`` is a client error (an HTTP 4xx exception), else None.
+
+    The single classification rule: a client-caused rejection is a handled failure,
+    anything else leaving a stage is an error. ``stage()`` applies it to exceptions
+    raised inside the block, and services use it for job-level outcomes so the stage
+    and the job agree.
+
+    Only Starlette/FastAPI ``HTTPException`` is recognised (checked without importing
+    Starlette). Other libraries' ``status_code`` attributes, e.g. an Azure SDK 404, are
+    dependency failures, not client errors.
+    """
+    module = sys.modules.get("starlette.exceptions")
+    http_exception = getattr(module, "HTTPException", None) if module is not None else None
+    if http_exception is not None and isinstance(exc, http_exception):
+        status = getattr(exc, "status_code", None)
+        if isinstance(status, int) and status in _CLIENT_ERROR:
+            return f"http.{status}"
+    return None
+
+
 def _duration_histogram() -> Any:
     return _state.instrument("histogram", c.METRIC_STAGE_DURATION, unit="s", description="Duration of a journey stage")
 
@@ -158,9 +183,12 @@ def stage(
             _finish_safely(handle, span, time.perf_counter() - start, None, business_error=True)
             raise
         except BaseException as exc:
-            if handle.outcome is Outcome.FAILURE:
-                # fail(code) then raise (e.g. an HTTPException for a validation error):
-                # a handled failure, not an unexpected error.
+            client_code = client_failure_code(exc) if handle.outcome is Outcome.SUCCESS else None
+            if handle.outcome is Outcome.FAILURE or client_code is not None:
+                # fail(code) then raise, or a client 4xx raised anywhere in the block
+                # (e.g. a helper's 404): a handled failure, not an unexpected error.
+                handle.outcome = Outcome.FAILURE
+                handle.error_code = handle.error_code or client_code
                 _finish_safely(handle, span, time.perf_counter() - start, None, business_error=True)
                 raise
             handle.outcome = Outcome.ERROR
