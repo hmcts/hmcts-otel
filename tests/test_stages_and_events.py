@@ -139,3 +139,24 @@ def test_fail_then_raise_is_a_handled_failure(tel: TelemetryCapture) -> None:
     (span,) = tel.finished_spans()
     assert span.status.status_code is StatusCode.UNSET
     assert span.events == ()
+
+
+def test_error_marks_a_server_failure_with_its_code(tel: TelemetryCapture) -> None:
+    with stage("storage_write") as s:
+        s.error("storage.write_failed")
+    failed = tel.events("storage_write.failed")[0]
+    assert failed[c.OUTCOME] == "error" and failed[c.ERROR_CODE] == "storage.write_failed"
+    (span,) = tel.finished_spans()
+    assert span.status.status_code is StatusCode.ERROR
+
+
+def test_error_code_survives_a_raised_exception(tel: TelemetryCapture) -> None:
+    class HTTPError(Exception):
+        pass
+
+    with pytest.raises(HTTPError):
+        with stage("upload") as s:
+            s.error("storage.write_failed")
+            raise HTTPError("500")
+    failed = tel.events("upload.failed")[0]
+    assert failed[c.OUTCOME] == "error" and failed[c.ERROR_CODE] == "storage.write_failed"
