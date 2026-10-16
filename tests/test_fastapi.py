@@ -143,3 +143,31 @@ def test_instrument_fastapi_spans_request_id_and_exclusions(tel: TelemetryCaptur
     first = next(s for s in server if s.attributes.get(c.REQUEST_ID) == rid)
     assert first is not None
     tel.assert_no_prohibited_content("q=private")
+
+
+def test_relay_rejects_journeys_outside_the_allowed_types():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from hmcts_otel import TelemetrySchema
+    from hmcts_otel.fastapi import create_telemetry_relay_router
+    from hmcts_otel.testing import capture_telemetry
+
+    schema = TelemetrySchema()
+    schema.event("ui.clicked", browser=True)
+    app = FastAPI()
+    app.include_router(create_telemetry_relay_router(schema=schema, journey_types={"browser.session"}))
+    client = TestClient(app)
+    sid = "6f1c2d3e-4b5a-4c6d-8e7f-9a0b1c2d3e4f"
+    with capture_telemetry():
+        response = client.post(
+            "/telemetry",
+            json={
+                "events": [
+                    {"name": "ui.clicked", "journey": {"type": "browser.session", "id": sid}},
+                    {"name": "ui.clicked", "journey": {"type": "recording.job", "id": sid}},  # a server journey
+                    {"name": "ui.clicked"},
+                ]
+            },
+        )
+    assert response.json() == {"accepted": 2, "rejected": 1}
