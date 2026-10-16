@@ -160,3 +160,54 @@ def test_error_code_survives_a_raised_exception(tel: TelemetryCapture) -> None:
             raise HTTPError("500")
     failed = tel.events("upload.failed")[0]
     assert failed[c.OUTCOME] == "error" and failed[c.ERROR_CODE] == "storage.write_failed"
+
+
+def test_client_http_error_from_a_helper_is_a_handled_failure(tel):
+    from fastapi import HTTPException
+
+    from hmcts_otel import client_failure_code
+
+    with pytest.raises(HTTPException), stage("lookup"):
+        raise HTTPException(status_code=404, detail="not found")
+    (failed,) = tel.events("lookup.failed")
+    assert failed[c.OUTCOME] == "failure" and failed[c.ERROR_CODE] == "http.404"
+    (span,) = [s for s in tel.finished_spans() if s.name == "lookup"]
+    assert span.status.status_code is not StatusCode.ERROR
+    assert client_failure_code(HTTPException(status_code=500)) is None
+    assert client_failure_code(ValueError()) is None
+
+
+def test_explicit_code_and_server_errors_win_over_the_http_status(tel):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException), stage("a") as s:
+        s.fail("validation.bad")
+        raise HTTPException(status_code=400)
+    with pytest.raises(HTTPException), stage("b") as s:
+        s.error("storage.write_failed")
+        raise HTTPException(status_code=409)
+    with pytest.raises(HTTPException), stage("c"):
+        raise HTTPException(status_code=503)
+    assert tel.events("a.failed")[0][c.ERROR_CODE] == "validation.bad"
+    b = tel.events("b.failed")[0]
+    assert b[c.OUTCOME] == "error" and b[c.ERROR_CODE] == "storage.write_failed"
+    cc = tel.events("c.failed")[0]
+    assert cc[c.OUTCOME] == "error" and cc[c.ERROR_CODE] == "unhandled.HTTPException"
+
+
+def test_status_code_on_other_exceptions_is_not_a_client_error(tel):
+    class AzureNotFound(Exception):
+        status_code = 404
+
+    with pytest.raises(AzureNotFound), stage("dep"):
+        raise AzureNotFound
+    assert tel.events("dep.failed")[0][c.OUTCOME] == "error"
+
+
+def test_http_status_does_not_override_an_outcome_already_set(tel):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException), stage("d") as s:
+        s.cancel("user.cancelled")
+        raise HTTPException(status_code=400)
+    assert tel.events("d.failed")[0][c.OUTCOME] != "failure"

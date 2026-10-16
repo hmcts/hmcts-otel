@@ -174,9 +174,16 @@ Telemetry never changes application behaviour:
   `capture_telemetry`). In production it is counted on `hmcts.telemetry.errors` and
   the code carries on: an invalid journey runs without a journey, an invalid name
   becomes `invalid_stage`, an invalid code becomes `invalid_error_code`.
-- Handled failures (`s.fail(...)`, also when followed by raising e.g. an `HTTPException`) set the
-  outcome, not the span's error status, so
-  they do not count as failed requests or dependencies in App Insights.
+- One classification rule:
+  - **client-caused** → handled failure: `s.fail(code)`, or any FastAPI/Starlette
+    `HTTPException` with a 4xx status leaving the block (code `http.<status>` unless
+    `fail` set one). The outcome is `failure` and the span is not marked as an error,
+    so these do not count as failed requests or dependencies in App Insights;
+  - **server-side or dependency** → `s.error(code)`, or any other exception
+    (`unhandled.<Type>`): outcome `error`, span status ERROR.
+
+  `client_failure_code(exc)` exposes the same rule, so job-level outcomes (e.g. a
+  terminal `job.finished` event) agree with the stage that stopped the job.
 
 Rules:
 
