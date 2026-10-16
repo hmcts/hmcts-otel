@@ -174,7 +174,8 @@ Telemetry never changes application behaviour:
   `capture_telemetry`). In production it is counted on `hmcts.telemetry.errors` and
   the code carries on: an invalid journey runs without a journey, an invalid name
   becomes `invalid_stage`, an invalid code becomes `invalid_error_code`.
-- Handled failures (`s.fail(...)`) set the outcome, not the span's error status, so
+- Handled failures (`s.fail(...)`, also when followed by raising e.g. an `HTTPException`) set the
+  outcome, not the span's error status, so
   they do not count as failed requests or dependencies in App Insights.
 
 Rules:
