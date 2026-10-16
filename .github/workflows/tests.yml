@@ -1,0 +1,65 @@
+name: Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+    # Skip docs/config-only changes — no code to test.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.claude/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: pytest (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python }}
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Run tests
+        run: uv run pytest -q
+
+      - name: Conventions doc is up to date
+        run: uv run python scripts/generate_conventions.py --check
+
+  minimum-versions:
+    # The oldest versions consuming services lock today (courtstranscribe).
+    name: pytest (minimum dependency versions)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install minimum versions
+        run: |
+          uv venv
+          uv pip install -e ".[dev]" "azure-monitor-opentelemetry==1.8.7" "opentelemetry-sdk==1.40.0" "opentelemetry-api==1.40.0"
+
+      - name: Run tests
+        run: .venv/bin/python -m pytest -q
