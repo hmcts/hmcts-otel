@@ -14,7 +14,7 @@ import logging
 import threading
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, Request
@@ -203,6 +203,7 @@ def create_telemetry_relay_router(
     dependencies: Sequence[Depends] = (),
     identity: Callable[[Request], str | None] | None = None,
     analytics_consent: Callable[[Request], bool] | None = None,
+    journey_types: Collection[str] | None = None,
     max_body_bytes: int = 32_768,
     rate_limit_per_minute: int = 120,
 ) -> APIRouter:
@@ -211,7 +212,10 @@ def create_telemetry_relay_router(
     ``dependencies`` should include the application's authentication dependency.
     ``identity`` keys the rate limit (default: client address).
     ``analytics_consent`` decides whether analytics-class events are accepted
-    (default: never). Responses never echo the submitted content.
+    (default: never). ``journey_types`` limits the journeys a browser may attach
+    events to (default: any): journey IDs come from the client, so without it a
+    user could write events into a server-side journey such as another user's job.
+    Responses never echo the submitted content.
     """
     schema = schema or default_schema
     limiter = _FixedWindowLimiter(rate_limit_per_minute)
@@ -258,6 +262,9 @@ def create_telemetry_relay_router(
                 continue
             journey = None
             if event.journey is not None:
+                if journey_types is not None and event.journey.type not in journey_types:
+                    rejected += 1
+                    continue
                 try:
                     journey = Journey(event.journey.type, event.journey.id, event.journey.parent_id)
                 except ValueError:

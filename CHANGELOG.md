@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [0.1.0] - unreleased
 
+### Relay
+- `create_telemetry_relay_router(journey_types=...)`: browser events may attach only
+  to the listed journey types, so a client cannot write into a server-side journey.
+
 ### Outcome classification
 - `StageHandle.error(code)` for server-side and dependency failures (outcome
   `error`, code kept if an exception follows).
