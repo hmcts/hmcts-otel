@@ -1,0 +1,33 @@
+# Release notes categories for GitHub Releases (a published release triggers the
+# publish job in build.yml; see docs/releasing.md).
+changelog:
+  exclude:
+    labels:
+      - skip-changelog
+    authors:
+      - dependabot[bot]
+  categories:
+    - title: Features
+      labels:
+        - feat
+        - feature
+    - title: Bug fixes
+      labels:
+        - fix
+        - bug
+    - title: CI
+      labels:
+        - ci
+    - title: Tests
+      labels:
+        - test
+    - title: Documentation
+      labels:
+        - docs
+    - title: Dependencies
+      labels:
+        - chore
+        - dependencies
+    - title: Other changes
+      labels:
+        - "*"
