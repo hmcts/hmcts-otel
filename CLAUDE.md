@@ -50,6 +50,10 @@ See [docs/design.md](docs/design.md) for the reasoning behind each.
 - `ruff` and `pyright` are blocking in CI. CI also runs the tests on Python
   3.11–3.13 and against the minimum supported dependency versions.
 
+- PR titles must be `type(scope): description [JIRA-123]` (conventional type plus
+  a Jira key), checked by `.github/workflows/pr-title-check.yml`. GitHub Release notes
+  are grouped by PR label (`.github/release.yml`).
+
 ## Testing
 
 Behavioural code ships with a test that turns red if it regresses. Use

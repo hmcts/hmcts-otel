@@ -1,0 +1,35 @@
+---
+name: PR Title Check
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  pr-title-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          PATTERN='^(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)(\([^)]+\))?: .+ \[[A-Z]+-[0-9]+\]$'
+
+          if printf '%s' "$PR_TITLE" | grep -qE "$PATTERN"; then
+            echo "PR title is valid: $PR_TITLE"
+            exit 0
+          else
+            echo "ERROR: PR title does not follow the required format."
+            echo ""
+            echo "Expected format: type[(scope)]: description [PROJ-123]"
+            echo ""
+            echo "Valid types: feat, fix, chore, docs, style, refactor, perf, test, build, ci, revert"
+            echo ""
+            echo "Example: feat(auth): add login endpoint [DIAAT-123]"
+            echo "Example: fix: resolve null pointer exception [PROJ-456]"
+            echo ""
+            echo "Your PR title was: $PR_TITLE"
+            exit 1
+          fi
