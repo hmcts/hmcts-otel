@@ -61,6 +61,12 @@ Extras:
 
 Do not vendor the wheel. Resolve it from the feed and let Dependabot or Renovate raise upgrades.
 
+The feed is private, so the installer must authenticate. Locally, the Azure Artifacts
+credential provider is the simplest option (`pip install keyring artifacts-keyring`, or
+`uv tool install keyring --with artifacts-keyring` and `UV_KEYRING_PROVIDER=subprocess`
+for uv). In CI, use the `AZURE_DEVOPS_ARTIFACT_USERNAME` / `AZURE_DEVOPS_ARTIFACT_TOKEN`
+credentials. Releases and versions are described in [docs/releasing.md](docs/releasing.md).
+
 ## Quick start: FastAPI
 
 ```python
@@ -407,6 +413,26 @@ All of this assumes App Insights ingestion sampling (`sampling_percentage`) is 1
   work that produces the data, not the generator that streams it.
 
 (Workspace-based resources: `AppEvents` / `AppMetrics` with `Properties`.)
+
+## Development
+
+```bash
+uv sync --extra dev
+pre-commit install          # ruff, hygiene hooks, conventions-doc check, gitleaks
+uv run pytest -q
+uv run ruff check . && uv run ruff format --check .
+uv run pyright
+uv run python scripts/generate_conventions.py --check
+```
+
+`docs/conventions.md` is generated from `hmcts_otel/conventions.py`
+(`uv run python scripts/generate_conventions.py`). See [CLAUDE.md](CLAUDE.md) for the
+invariants every change must keep.
+
+## Security
+
+Report vulnerabilities privately, as described in [docs/SECURITY.md](docs/SECURITY.md).
+Do not open a public issue.
 
 ## Compatibility and versioning
 
