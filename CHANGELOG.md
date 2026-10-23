@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [0.2.1] - unreleased
 
+Security and privacy fixes, and stricter relay defaults. **Upgrading:** a service that
+mounts the relay must pass `journey_types` for browser journeys, and its browser
+journey IDs must be UUIDs. A browser event that sends `hmcts.outcome`,
+`hmcts.error.code` or `hmcts.request.id` must list it in its registration (`attributes=`).
+A service that removed `journey.parent_id` itself before the relay no longer needs to.
+
 ### Security
 - Event metadata can no longer be overwritten by caller attributes. Journey type, ID and
   parent, event source and class, duration and the custom-event name are set by
