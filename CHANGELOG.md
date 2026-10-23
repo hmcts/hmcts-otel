@@ -18,6 +18,12 @@ All notable changes to this project are documented here. The format follows
   where the event lists them. Server-side `record_event` still accepts outcome and error
   code on any event.
 
+### Changed (relay behaviour)
+- **The relay denies journeys by default.** Without `journey_types`, an event carrying a
+  journey is now rejected (counted in the response's `rejected`), as an event whose
+  journey type is not listed already was. Before, any journey type was accepted. Pass
+  `journey_types={...}` with the journeys the browser owns.
+
 ## [0.2.0] - unreleased
 
 ### Added (OBS-5: AI usage metering)

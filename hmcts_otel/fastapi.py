@@ -212,14 +212,17 @@ def create_telemetry_relay_router(
     ``dependencies`` should include the application's authentication dependency.
     ``identity`` keys the rate limit (default: client address).
     ``analytics_consent`` decides whether analytics-class events are accepted
-    (default: never). ``journey_types`` limits the journeys a browser may attach
-    events to (default: any): journey IDs come from the client, so without it a
-    user could write events into a server-side journey such as another user's job.
+    (default: never). ``journey_types`` lists the journeys a browser may attach
+    events to (default: none). Journey IDs come from the client, so a listed type
+    must be one the browser owns (e.g. its own session), never a server-side
+    journey such as another user's job. An event whose journey type is not listed
+    is rejected.
     Responses never echo the submitted content.
     """
     schema = schema or default_schema
     limiter = _FixedWindowLimiter(rate_limit_per_minute)
     identify = identity or _default_identity
+    allowed_journeys = frozenset(journey_types or ())
     router = APIRouter(dependencies=list(dependencies))
 
     @router.post(path, status_code=202, include_in_schema=True, summary="Browser telemetry relay")
@@ -262,7 +265,7 @@ def create_telemetry_relay_router(
                 continue
             journey = None
             if event.journey is not None:
-                if journey_types is not None and event.journey.type not in journey_types:
+                if event.journey.type not in allowed_journeys:
                     rejected += 1
                     continue
                 try:

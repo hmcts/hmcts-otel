@@ -135,3 +135,24 @@ def test_each_reserved_key_is_dropped_without_a_journey(tel: TelemetryCapture, k
     (ev,) = tel.events("job.finished")
     assert ev.get(key) != forged
     assert _reserved_drops(tel) == 1
+
+
+# --- #7: the relay denies journeys by default ---------------------------------------
+
+
+def test_relay_without_journey_types_refuses_journeys(tel: TelemetryCapture) -> None:
+    sid = str(uuid.uuid4())
+    client = _client(_relay_schema(), journey_types=None)
+    result = _post(client, [{"name": "ui.clicked", "journey": {"type": SESSION, "id": sid}}, {"name": "ui.clicked"}])
+    assert result == {"accepted": 1, "rejected": 1}
+    (ev,) = tel.events("ui.clicked")
+    assert c.JOURNEY_ID not in ev
+    tel.assert_no_prohibited_content(sid)
+
+
+def test_relay_with_journey_types_accepts_a_listed_type(tel: TelemetryCapture) -> None:
+    sid = str(uuid.uuid4())
+    result = _post(_client(_relay_schema()), [{"name": "ui.clicked", "journey": {"type": SESSION, "id": sid}}])
+    assert result == {"accepted": 1, "rejected": 0}
+    (ev,) = tel.events("ui.clicked")
+    assert ev[c.JOURNEY_TYPE] == SESSION and ev[c.JOURNEY_ID] == sid

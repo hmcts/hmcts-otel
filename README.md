@@ -351,6 +351,7 @@ app.include_router(
         dependencies=[Depends(get_current_user)],  # your auth
         identity=lambda request: request.state.user_id,  # rate-limit key
         analytics_consent=lambda request: request.cookies.get("cookie_policy_analytics") == "yes",
+        journey_types={"dictation.session"},  # journeys the browser owns
     )
 )
 ```
@@ -367,6 +368,9 @@ POST /api/telemetry
 - A browser event carries only the attributes its registration lists. Event metadata
   (journey, `hmcts.event.source`, `hmcts.event.class`, `hmcts.duration_ms`, and
   `hmcts.request.id` unless listed) is set by the server and never taken from attributes.
+- Journeys are denied by default: an event carrying a journey is rejected unless its type
+  is in `journey_types`. List only journeys the browser owns (its own session), never a
+  server-side one: journey IDs come from the client.
 - **Operational** events are accepted regardless of analytics consent.
   **Analytics** events need `analytics_consent` to return true.
 - `Content-Type: application/json` only (415 otherwise), so cross-site forms cannot post events with the user's cookies.
