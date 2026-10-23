@@ -96,9 +96,8 @@ def scrub_event(
             for item in values:
                 if isinstance(item, dict) and item.get("value"):
                     item["value"] = REDACTED
-    event = _redact_deep(event, redactor)
     _tag_with_context(event)
-    return event
+    return _redact_deep(event, redactor)
 
 
 def scrub_breadcrumb(crumb: dict[str, Any], redactor: Redactor) -> dict[str, Any] | None:
