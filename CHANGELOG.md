@@ -20,6 +20,11 @@ All notable changes to this project are documented here. The format follows
 - When the logging filter fails closed, it now also removes every extra attribute
   (`extra=` and context), not only the message, arguments and exception. Before, a
   failing redactor let unredacted extras reach stdout and the OpenTelemetry log.
+- Quoted secret values are redacted to the closing quote (double or single, backslash
+  escapes allowed, at most 4,096 characters; an unclosed quote to the end of the line):
+  `password="two words"` was exported as `password="[REDACTED] words"`. Connection-string
+  values with spaces (`Password=two words;`, up to `;` or the end of the line) and ODBC
+  braced values (`Pwd={two words}`) are redacted in full.
 
 ### Changed (relay behaviour)
 - **The relay denies journeys by default.** Without `journey_types`, an event carrying a

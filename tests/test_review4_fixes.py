@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import uuid
 from collections.abc import Iterator
 from typing import Any
@@ -234,3 +235,66 @@ def test_failed_redaction_drops_extras(
     assert line["message"] == "[unformattable log record]" and line["level"] == "WARNING"
     assert SENTINEL not in json.dumps(line)
     assert not default_redactor.matches(json.dumps(line))
+
+
+# --- #10: quoted and connection-string secrets are redacted in full ------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ('password="two words"', 'password="[REDACTED]"'),
+        ("password='a,b&c'", "password='[REDACTED]'"),
+        ('{"password": "two words", "user": "u1"}', '{"password": "[REDACTED]", "user": "u1"}'),
+        (r'client_secret="a\"b c" tail', 'client_secret="[REDACTED]" tail'),
+        (r"pwd='it\'s secret' tail", "pwd='[REDACTED]' tail"),
+        ('password="unclosed two words', 'password="[REDACTED]'),
+        ("Server=db;Uid=u;Password=two words;Encrypt=yes", "Server=db;Uid=u;Password=[REDACTED];Encrypt=yes"),
+        ("Server=db;PWD=two words", "Server=db;PWD=[REDACTED]"),
+        ("Pwd={two words;x};Uid=u", "Pwd={[REDACTED]};Uid=u"),
+        ("AccountKey=s3cr3t==;EndpointSuffix=x", "AccountKey=[REDACTED];EndpointSuffix=x"),
+        # A key=value log line keeps its other fields.
+        ("password=hunter2 user=u1 retry=3", "password=[REDACTED] user=u1 retry=3"),
+    ],
+)
+def test_quoted_and_connection_string_secrets_are_redacted_in_full(text: str, expected: str) -> None:
+    assert default_redactor.redact(text) == expected
+    assert default_redactor.redact(expected) == expected  # idempotent
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Your password is incorrect, please try again.",
+        "The password policy requires 12 characters; see the guidance.",
+        "Passwords and secrets are never logged.",
+        'He said "password" twice.',
+    ],
+)
+def test_prose_about_passwords_is_left_alone(text: str) -> None:
+    assert default_redactor.redact(text) == text
+
+
+def test_quoted_value_at_the_bound_is_redacted_in_full() -> None:
+    value = "x y" * 1365 + "z"  # 4096 characters
+    assert len(value) == 4096
+    assert default_redactor.redact(f'password="{value}" tail') == 'password="[REDACTED]" tail'
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'password="' * 30_000,
+        "password='" * 30_000,
+        'password="' + "\\" * 200_000,
+        "password=" * 30_000,
+        "password=" + "a " * 100_000,
+        "Pwd={" * 40_000,
+        "pwd=" + "a" * 200_000 + ";",
+    ],
+    ids=["dquotes", "squotes", "backslashes", "keys", "spaced", "braces", "long_odbc"],
+)
+def test_secret_rule_is_fast_on_adversarial_input(text: str) -> None:
+    started = time.perf_counter()
+    default_redactor.redact(text)
+    assert time.perf_counter() - started < 0.5

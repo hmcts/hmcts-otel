@@ -25,8 +25,14 @@ class RedactionRule:
 
 
 def _keep_key(match: re.Match[str]) -> str:
-    # group 1: key, group 2: separator as written (e.g. '=', '="', '": "'), group 3: value
-    return f"{match.group(1)}{match.group(2)}{REDACTED}"
+    # group 1: key, group 2: separator as written (e.g. '=', '": '), group 3: value,
+    # including any quotes or braces around it, which are kept.
+    value = match.group(3)
+    opening = value[0] if value[0] in "\"'{" else ""
+    closing = {'"': '"', "'": "'", "{": "}"}.get(opening, "")
+    if not (len(value) > 1 and value.endswith(closing)):
+        closing = ""
+    return f"{match.group(1)}{match.group(2)}{opening}{REDACTED}{closing}"
 
 
 def _keep_url(match: re.Match[str]) -> str:
@@ -53,7 +59,18 @@ DEFAULT_RULES: tuple[RedactionRule, ...] = (
             r"(?i)\b(AccountKey|SharedAccessKey|SharedAccessSignature|sig|password|pwd|secret|client_secret"
             r"|api[_-]?key|access_token|refresh_token)"
             # key=value, key="value", key='value', "key": "value", key: value
-            r"(\"?\s{0,3}[=:]\s{0,3}[\"']?)(?!\[REDACTED\])([^;&\s\"',}]{1,4096})"
+            r"(\"?\s{0,3}[=:]\s{0,3})(?![\"'{]?\[REDACTED\])("
+            # Quoted: to the closing quote (backslash escapes allowed), or the end of
+            # the line if unclosed.
+            r"\"(?:[^\"\\\r\n]|\\.){1,4096}\"?"
+            r"|'(?:[^'\\\r\n]|\\.){1,4096}'?"
+            # ODBC braced: Pwd={two words}
+            r"|\{[^}\r\n]{1,256}\}"
+            # Connection string, Password=two words;: after a bare '=', up to ';' or the
+            # end of the line, if no other key=value intervenes.
+            r"|(?<==)[^;=\r\n\"'{}]{1,256}(?=;|\r|\n|\Z)"
+            # Otherwise up to the next delimiter.
+            r"|[^;&\s\"',}]{1,4096})"
         ),
         _keep_key,
     ),
