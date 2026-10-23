@@ -75,7 +75,7 @@ DEFAULT_RULES: tuple[RedactionRule, ...] = (
             # key=value, key="value", key='value', "key": "value", key: value. Up to
             # three spaces may follow the separator; they are kept, and never given
             # back to the value (possessive), so redaction stays idempotent.
-            r"(\"?\s{0,3}[=:]\s{0,3}+)(?![\"'{]?\[REDACTED\])("
+            r"([\"']?\s{0,3}[=:]\s{0,3}+)(?![\"'{]?\[REDACTED\])("
             # Each value has a bounded fast path and fails closed past it: a longer value
             # is redacted to its closing quote or brace if one follows on the same line,
             # otherwise to the end of the line (a connection-string value to ';'). The
