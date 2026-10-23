@@ -38,6 +38,13 @@ All notable changes to this project are documented here. The format follows
 - **The relay drops a browser-sent `journey.parent_id` by default.** New option
   `create_telemetry_relay_router(allow_parent_id=True)` keeps it (validated as above).
 
+### Build
+- Draft versions take their base from `pyproject.toml`
+  (`<version>.dev<run_number>+<sha>`), not from the latest `v*` tag, which gave
+  `0.0.0.dev<n>+<sha>` in a repository without tags (never satisfying `>=0.2.0`). A
+  release publishes the `pyproject.toml` version and fails if the release tag differs.
+  The computation is in `scripts/artefact_version.sh`, with tests.
+
 ## [0.2.0] - unreleased
 
 ### Added (OBS-5: AI usage metering)
