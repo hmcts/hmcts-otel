@@ -226,6 +226,37 @@ API. `OTEL_TRACES_EXPORTER=none` is set only for the duration of the call, and r
 A truncated string still carries part of its content. Over-long or non-conforming
 values are dropped and counted.
 
+## 20. AI usage is metered, not priced
+
+**Decision (OBS-5).** Model and speech usage are recorded as metrics only: tokens per
+call (`gen_ai.client.token.usage`, GenAI semantic conventions v1.37.0, pinned in
+`conventions.GEN_AI_SEMCONV_VERSION`), calls (`hmcts.ai.requests`) and audio seconds
+(`hmcts.speech.audio.duration`), by provider, model, feature, outcome and fallback.
+
+**Why.** Cost is taken from the Azure and GCP bills and allocated by each feature's share
+of usage at query time. A price table in the library would be wrong as soon as prices,
+discounts or commitments changed, and would need a release to fix. Metrics are
+pre-aggregated and never sampled, so totals are complete. A separate requests counter
+gives call counts, error types and the fallback rate without dividing token points.
+
+**Content.** The litellm callback reads only an allowlist of fields (a test fails if it
+reads anything else, `messages` and `choices` included). Setup defaults the GenAI
+content-capture variables to off, and the span exporter drops prompt and response
+attributes written by any GenAI instrumentation, because content cannot be made safe by
+pattern-based redaction.
+
+**Never raises, even in strict mode.** Provider and model names and token counts come from
+provider responses, which the caller cannot fix, so bad values are replaced or skipped
+and counted on `hmcts.telemetry.errors`, never raised. `ai_feature()` names come from
+code and follow `stage()`: invalid names raise in strict mode.
+
+**Fallback detection.** Explicit (`ai_fallback()`, `fallback=True`,
+`metadata={"hmcts_ai_fallback": True}`) or a litellm Router fallback (`attempted_fallbacks`
+in the call's metadata). litellm's SDK-level `fallbacks=` gives callbacks no signal.
+
+**No `genai` extra.** litellm is large and fast-moving; services choose its version.
+`instrument_litellm()` imports it lazily and returns False if it is missing.
+
 ## Known limitations
 
 - **uvicorn access logs** use uvicorn's own handler, which this package cannot filter.
