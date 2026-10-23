@@ -280,6 +280,42 @@ itself (a browser "error report copied" event names the failed request).
 Server code may set `hmcts.outcome` and `hmcts.error.code` on any event. A browser may
 set only what the event's registration lists, core keys included.
 
+## 22. Every log record is scrubbed before export
+
+**Decision (OBS-5).** `setup_telemetry` installs `ScrubbingLogRecordProcessor` as the first
+processor on the package's LoggerProvider: on the Azure path through the distro's
+`log_record_processors` argument (added before its exporting processor), on the custom
+path before the exporter's processor. It changes each record in place: the body and
+attribute values are redacted (nested maps and lists too; bytes and other objects are
+replaced by a placeholder), GenAI content attributes are dropped, and exception text the
+package did not format is reduced to `Type: [REDACTED]`, as in the span exporter.
+
+**Why.** The logging filters (§4) only see records that pass through a `logging.Handler`.
+Records emitted directly through the OpenTelemetry Logs API skip them. GenAI
+instrumentation does this when content capture is on (openai-v2 events, litellm's "otel"
+callback): a `gen_ai.user.message` record with `body={"content": ...}` was exported
+verbatim. A processor that runs before the exporting one is the only point every record
+passes through, and `ReadWriteLogRecord` is writable there (SDK 1.40–1.45); wrapping the
+distro's exporter would need its private API.
+
+**GenAI events are allowlisted.** Span events and log records named `gen_ai.*` keep content
+under unprefixed keys (`content`, `message.content`, `tool_calls`) and in the body, so
+prefix-based dropping misses it. They keep only `gen_ai.system`, `gen_ai.provider.name`,
+`gen_ai.operation.name`, the request and response models, `index`, `finish_reason`,
+`gen_ai.response.finish_reasons` and token-usage counts; the body and everything else are
+dropped. The span exporter applies the same allowlist to span events.
+
+**Standard-library records** have already passed `RedactingFilter`. Redaction is
+idempotent, so redacting them again changes nothing. The filter now leaves the
+`hmcts.exception.formatted` marker on records whose exception it formatted, so the
+processor keeps their stack traces; the processor removes the marker before export and
+the JSON stdout formatter never prints it. A stack trace the filter already replaced with
+`[REDACTED]` is left as it is.
+
+**Never raises.** A record that cannot be scrubbed keeps no content (a placeholder body,
+no attributes) and the failure is counted on `hmcts.telemetry.errors`
+(`internal.log_record_scrub`).
+
 ## Known limitations
 
 - **uvicorn access logs** use uvicorn's own handler, which this package cannot filter.

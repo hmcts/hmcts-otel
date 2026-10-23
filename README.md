@@ -284,7 +284,11 @@ input_tokens=..., output_tokens=..., outcome=..., fallback=...)` after each mode
   `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED` to `false` (an explicit `true` is kept,
   with a warning), and prompt/response attributes written by any GenAI instrumentation
   (`gen_ai.prompt.*`, `gen_ai.completion.*`, `gen_ai.input.messages`, ...) are dropped from
-  exported spans. Other litellm callbacks (e.g. Langfuse) are not changed and send what
+  exported spans and log records. GenAI events (span events and log records named
+  `gen_ai.*`, such as `gen_ai.user.message` and `gen_ai.choice`) keep only non-content
+  attributes (provider, operation, models, `index`, finish reasons, token usage) and lose
+  their body. Log records emitted directly through the OpenTelemetry Logs API are redacted
+  like logging records. Other litellm callbacks (e.g. Langfuse) are not changed and send what
   they are configured to send.
 
 ```kusto
