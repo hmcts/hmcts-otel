@@ -131,3 +131,23 @@ def test_events_keep_their_journey_and_request_id(tel: TelemetryCapture, journey
     (event,) = tel.events("job.created")
     assert event[c.JOURNEY_ID] == journey_id
     assert event[c.REQUEST_ID] == "0f8e2c6a-5b3d-4c1e-9a7f-2d4b6e8a0c1e"
+
+
+def test_stack_info_is_redacted() -> None:
+    # stack_info is printed by the JSON stdout formatter, so the filter must redact it.
+    import logging
+
+    from hmcts_otel import default_redactor
+    from hmcts_otel._logging import RedactingFilter
+
+    record = logging.LogRecord("app", logging.WARNING, __file__, 1, "stack check", None, None)
+    record.stack_info = "Stack (most recent call last):\n  note: judge.smith@example.test"
+    assert RedactingFilter(default_redactor).filter(record)
+    assert "judge.smith@example.test" not in (record.stack_info or "")
+
+
+def test_an_extra_whose_key_matches_a_redaction_rule_is_dropped(tel: TelemetryCapture) -> None:
+    import logging
+
+    logging.getLogger("app").warning("saved", extra={"judge.smith@example.test": "x"})
+    tel.assert_no_prohibited_content("judge.smith@example.test")
