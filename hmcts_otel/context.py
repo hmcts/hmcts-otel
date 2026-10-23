@@ -67,7 +67,7 @@ def journey(journey_type: str, journey_id: str, *, parent_id: str | None = None)
         _guard.invalid("journey", f"invalid journey: {exc}")
         current = None
     previous = _journey.get()
-    token = _journey.set(current) if current is not None else None
+    token = _journey.set(current)
     try:
         yield current
     finally:
