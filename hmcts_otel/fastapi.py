@@ -168,28 +168,48 @@ class RelayBatch(BaseModel):
 
 
 class _FixedWindowLimiter:
-    """Per-process, per-identity request limit. Multiple replicas each apply their own."""
+    """Per-process, per-identity request limit. Multiple replicas each apply their own.
 
-    def __init__(self, limit: int, window_s: float = 60.0, max_keys: int = 10_000) -> None:
+    At most ``max_keys`` identities are tracked. Expired buckets are pruned only when a
+    new identity arrives at capacity, and at most once per ``prune_interval_s``, so the
+    work per request stays bounded however many identities arrive. While still at
+    capacity a new identity is refused (counted as ``invalid.relay_capacity``) and the
+    identities already tracked keep their state, so nobody's limit is reset.
+    """
+
+    def __init__(
+        self, limit: int, window_s: float = 60.0, max_keys: int = 10_000, prune_interval_s: float = 5.0
+    ) -> None:
         self.limit = limit
         self.window_s = window_s
         self.max_keys = max_keys
+        self.prune_interval_s = min(prune_interval_s, window_s)
         self._buckets: dict[str, tuple[float, int]] = {}
+        self._next_prune = 0.0
         self._lock = threading.Lock()
 
     def allow(self, key: str) -> bool:
         now = time.monotonic()
         with self._lock:
-            if len(self._buckets) > self.max_keys:
-                self._buckets = {k: v for k, v in self._buckets.items() if now - v[0] < self.window_s}
-            start, count = self._buckets.get(key, (now, 0))
-            if now - start >= self.window_s:
-                start, count = now, 0
-            if count >= self.limit:
-                self._buckets[key] = (start, count)
-                return False
-            self._buckets[key] = (start, count + 1)
-            return True
+            bucket = self._buckets.get(key)
+            if bucket is None and len(self._buckets) >= self.max_keys:
+                if now >= self._next_prune:
+                    self._next_prune = now + self.prune_interval_s
+                    self._buckets = {k: v for k, v in self._buckets.items() if now - v[0] < self.window_s}
+                at_capacity = len(self._buckets) >= self.max_keys
+            else:
+                at_capacity = False
+            if not at_capacity:
+                start, count = bucket or (now, 0)
+                if now - start >= self.window_s:
+                    start, count = now, 0
+                if count >= self.limit:
+                    self._buckets[key] = (start, count)
+                    return False
+                self._buckets[key] = (start, count + 1)
+                return True
+        _guard.invalid_data("relay_capacity")
+        return False
 
 
 def _default_identity(request: Request) -> str:

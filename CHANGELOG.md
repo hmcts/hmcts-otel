@@ -11,6 +11,20 @@ No API changes. **Behaviour notes:** some lines are now redacted further than be
 (see "Changed"), and dropped-attribute warnings for browser events show unregistered
 keys as a hash.
 
+### Fixed (PR #4 review, round 3)
+- **The relay rate limiter has a hard capacity.** At most `max_keys` (10,000) identities
+  are tracked. Expired buckets are pruned only when a new identity arrives at capacity,
+  and at most once every 5 seconds, so the work per request stays bounded. While still at
+  capacity a new identity is refused with 429 and counted as `invalid.relay_capacity`;
+  identities already tracked keep their state. Previously every request above 10,000
+  identities rebuilt the whole table under the lock.
+- An invalid nested `journey()` (non-strict mode) now runs without a journey, as
+  documented, instead of leaving the outer journey active.
+- Sentry events: dictionary keys are redacted too, and redaction runs after the context
+  tags are added, so the tags are covered.
+- `ContextFilter` no longer adds context attributes to custom-event records, because
+  `record_event` already sets the journey and request ID itself.
+
 ### Security
 - **Log records emitted through the OpenTelemetry Logs API are scrubbed.** They skipped
   the logging filters, so a GenAI instrumentation event (openai-v2 events, litellm's
