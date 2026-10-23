@@ -191,3 +191,54 @@ def test_url_rules_stay_linear_time(text: str) -> None:
     start = time.perf_counter()
     default_redactor.redact(text)
     assert time.perf_counter() - start < 0.5
+
+
+# URL userinfo fails closed (PR #4 review) --------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://fictional_user:" + "A" * 257 + "@example.test/path",  # password past the old bound
+        "https://" + "fictional_user" * 30 + ":pw@example.test/path",  # username past the old bound
+        "https://FICTIONAL_TOKEN@localhost/path",  # username only
+        "https://fictional_user:@example.test/",  # empty password
+        "postgresql://fictional_user:secret.value@db.example.test:5432/app",
+    ],
+)
+def test_url_userinfo_is_redacted_whole(url: str) -> None:
+    out = default_redactor.redact(f"connecting to {url} now")
+    assert "fictional_user" not in out and "FICTIONAL_TOKEN" not in out
+    assert "AAAA" not in out and "secret" not in out and ":pw@" not in out
+    assert out.endswith(" now")
+
+
+def test_an_at_sign_in_the_path_is_not_userinfo() -> None:
+    assert default_redactor.redact("https://example.test/path@thing") == "https://example.test/path@thing"
+
+
+def test_userinfo_whose_at_sign_is_past_the_inspected_text_fails_closed() -> None:
+    cut = MAX_TEXT_LENGTH + redaction._REDACTION_MARGIN
+    text = "x" * (MAX_TEXT_LENGTH - 50) + " https://fictional_user:" + "P" * cut + "@example.test/p"
+    out = default_redactor.redact(text)
+    assert "fictional_user" not in out and "PPPP" not in out
+    assert out.endswith(redaction.TRUNCATED)
+    assert "url_userinfo" in default_redactor.matches(text)
+
+
+def test_a_long_url_without_userinfo_past_the_cut_is_not_reported() -> None:
+    text = "x" * (MAX_TEXT_LENGTH + redaction._REDACTION_MARGIN + 10) + " https://example.test/ok"
+    assert "url_userinfo" not in default_redactor.matches(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["://" * 20_000, "://a" * 15_000, "https://" + "a" * 58_000, "x" * 40_000 + " https://" + "u" * 90_000],
+)
+def test_userinfo_rule_stays_linear_time(text: str) -> None:
+    import time
+
+    start = time.perf_counter()
+    default_redactor.redact(text)
+    default_redactor.matches(text)
+    assert time.perf_counter() - start < 0.5

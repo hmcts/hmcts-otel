@@ -31,6 +31,11 @@ keys as a hash.
   on the part before `?`, and the relative-path rule likewise, so a longer URL exported its
   query unchanged. Both now match any length in linear time (the absolute-URL part never
   crosses another `http(s)://`, so repeated scheme prefixes stay cheap).
+- **URL userinfo fails closed.** The whole userinfo is redacted at any length and in every
+  form: `user:password@`, `user@` (a token as username) and `user:@`. Each component was
+  bounded at 256 characters, and username-only or empty-password URLs were not matched.
+  Credentials whose `@` lies past the inspected prefix of a very long text are redacted up
+  to the cut, and `matches()` reports them.
 - **URL credentials are removed before the email rule runs**, so
   `https://user:password@host.domain/path` no longer keeps the username.
 
