@@ -17,6 +17,9 @@ All notable changes to this project are documented here. The format follows
   keys such as `hmcts.outcome` and `hmcts.error.code` are accepted from a browser only
   where the event lists them. Server-side `record_event` still accepts outcome and error
   code on any event.
+- When the logging filter fails closed, it now also removes every extra attribute
+  (`extra=` and context), not only the message, arguments and exception. Before, a
+  failing redactor let unredacted extras reach stdout and the OpenTelemetry log.
 
 ### Changed (relay behaviour)
 - **The relay denies journeys by default.** Without `journey_types`, an event carrying a
