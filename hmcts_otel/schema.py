@@ -15,7 +15,7 @@ from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 
 from hmcts_otel import conventions as c
-from hmcts_otel.conventions import EventClass, EventSource, Outcome
+from hmcts_otel.conventions import EventClass, EventSource, Outcome, SpeechMode
 from hmcts_otel.redaction import Redactor, default_redactor
 
 AttributeValue = str | bool | int | float
@@ -32,6 +32,7 @@ RESERVED_NAMES = frozenset(vars(logging.LogRecord("x", logging.INFO, "x", 0, "x"
 _ID_PATTERN = r"[A-Za-z0-9_-]{1,64}"
 _CODE_PATTERN = r"[A-Za-z0-9_.:-]{1,64}"
 _SLUG_PATTERN = r"[a-z0-9][a-z0-9_.-]{0,63}"
+_STAGE_PATTERN = r"[a-z][a-z0-9_.]{0,63}"
 
 
 @dataclass(frozen=True)
@@ -96,7 +97,18 @@ def _core_attributes() -> list[AttributeSpec]:
         AttributeSpec(
             c.JOURNEY_PARENT_ID, description="Parent journey, e.g. the batch a file belongs to.", pattern=_ID_PATTERN
         ),
-        AttributeSpec(c.STAGE, description="Stage name.", pattern=r"[a-z][a-z0-9_.]{0,63}"),
+        AttributeSpec(c.STAGE, description="Stage name.", pattern=_STAGE_PATTERN),
+        AttributeSpec(
+            c.AI_FEATURE,
+            description="Product feature an AI call served, e.g. summarise. Defaults to the current stage.",
+            pattern=_STAGE_PATTERN,
+        ),
+        AttributeSpec(c.AI_FALLBACK, type=bool, description="Whether an AI call was a fallback to another model."),
+        AttributeSpec(
+            c.SPEECH_MODE,
+            description="Speech transcription mode.",
+            allowed_values=frozenset(m.value for m in SpeechMode),
+        ),
         AttributeSpec(c.OUTCOME, description="Stage outcome.", allowed_values=frozenset(o.value for o in Outcome)),
         AttributeSpec(c.ERROR_CODE, description="Controlled error code. Never a message.", pattern=_CODE_PATTERN),
         AttributeSpec(

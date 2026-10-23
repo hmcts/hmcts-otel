@@ -64,7 +64,9 @@ class TelemetryCapture:
         return [str(e[c.CUSTOM_EVENT_NAME]) for e in self.events()]
 
     def metric_points(self, name: str) -> list[dict[str, Any]]:
-        """Data points for a metric as ``{"attributes": {...}, "value"|"count"|"sum": ...}``."""
+        """Data points for a metric as ``{"attributes": {...}, ...}`` with the point's
+        ``value`` (counters) or ``count``, ``sum``, ``min``, ``max``, ``bucket_counts``
+        and ``explicit_bounds`` (histograms)."""
         data = self.metrics.get_metrics_data()
         points: list[dict[str, Any]] = []
         if data is None:
@@ -76,7 +78,7 @@ class TelemetryCapture:
                         continue
                     for p in metric.data.data_points:
                         entry: dict[str, Any] = {"attributes": dict(p.attributes or {})}
-                        for attr in ("value", "count", "sum"):
+                        for attr in ("value", "count", "sum", "min", "max", "bucket_counts", "explicit_bounds"):
                             if hasattr(p, attr):
                                 entry[attr] = getattr(p, attr)
                         points.append(entry)
