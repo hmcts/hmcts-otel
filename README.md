@@ -371,6 +371,9 @@ POST /api/telemetry
 - Journeys are denied by default: an event carrying a journey is rejected unless its type
   is in `journey_types`. List only journeys the browser owns (its own session), never a
   server-side one: journey IDs come from the client.
+- Browser journey `id` (and `parent_id`) must be a UUID or 32 hex characters; anything
+  else rejects the event. A browser's `parent_id` is dropped unless
+  `allow_parent_id=True`.
 - **Operational** events are accepted regardless of analytics consent.
   **Analytics** events need `analytics_consent` to return true.
 - `Content-Type: application/json` only (415 otherwise), so cross-site forms cannot post events with the user's cookies.

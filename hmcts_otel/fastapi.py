@@ -204,6 +204,7 @@ def create_telemetry_relay_router(
     identity: Callable[[Request], str | None] | None = None,
     analytics_consent: Callable[[Request], bool] | None = None,
     journey_types: Collection[str] | None = None,
+    allow_parent_id: bool = False,
     max_body_bytes: int = 32_768,
     rate_limit_per_minute: int = 120,
 ) -> APIRouter:
@@ -216,7 +217,10 @@ def create_telemetry_relay_router(
     events to (default: none). Journey IDs come from the client, so a listed type
     must be one the browser owns (e.g. its own session), never a server-side
     journey such as another user's job. An event whose journey type is not listed
-    is rejected.
+    is rejected. Journey ``id`` and ``parent_id`` must be a UUID or 32 hex characters
+    (anything else, such as a name or phone number, rejects the event).
+    ``allow_parent_id`` keeps a browser-sent ``parent_id`` (default: dropped, since it
+    would let a user link their events under any journey).
     Responses never echo the submitted content.
     """
     schema = schema or default_schema
@@ -268,8 +272,14 @@ def create_telemetry_relay_router(
                 if event.journey.type not in allowed_journeys:
                     rejected += 1
                     continue
+                parent_id = event.journey.parent_id if allow_parent_id else None
+                if not is_valid_request_id(event.journey.id) or (
+                    parent_id is not None and not is_valid_request_id(parent_id)
+                ):
+                    rejected += 1
+                    continue
                 try:
-                    journey = Journey(event.journey.type, event.journey.id, event.journey.parent_id)
+                    journey = Journey(event.journey.type, event.journey.id, parent_id)
                 except ValueError:
                     rejected += 1
                     continue
