@@ -52,7 +52,13 @@ def _record_exception(
     except Exception:  # never fail the caller; keep the type only
         safe = {"exception.type": type(exception).__name__, "exception.message": REDACTED}
     if attributes:
-        safe.update(attributes)
+        safe.update(
+            {
+                key: value
+                for key, value in attributes.items()
+                if key not in {"exception.type", "exception.message", "exception.stacktrace", EXCEPTION_FORMATTED}
+            }
+        )
     self.add_event(name="exception", attributes=safe, timestamp=timestamp)
 
 
