@@ -87,6 +87,23 @@ class EventSpec:
 
 _JOURNEY_KEYS = (c.JOURNEY_TYPE, c.JOURNEY_ID, c.JOURNEY_PARENT_ID)
 
+# Event metadata hmcts-otel sets itself, from the call, the journey context and the
+# request: never taken from caller-supplied attributes, on any path. A caller (or a
+# browser via the relay) passing one has it dropped and counted (reason "reserved").
+# The request ID is reserved too, except on an event whose registration lists it
+# explicitly (e.g. a browser "error report copied" event naming the failed request).
+METADATA_KEYS: frozenset[str] = frozenset(
+    {
+        c.CUSTOM_EVENT_NAME,
+        c.JOURNEY_TYPE,
+        c.JOURNEY_ID,
+        c.JOURNEY_PARENT_ID,
+        c.EVENT_SOURCE,
+        c.EVENT_CLASS,
+        c.DURATION_MS,
+    }
+)
+
 
 def _core_attributes() -> list[AttributeSpec]:
     return [
@@ -220,21 +237,32 @@ class TelemetrySchema:
     # Validation -------------------------------------------------------------------
 
     def validate(
-        self, values: Mapping[str, object], *, allowed: Collection[str] | None = None
+        self,
+        values: Mapping[str, object],
+        *,
+        allowed: Collection[str] | None = None,
+        reserved: Collection[str] = (),
+        core_exempt: bool = True,
     ) -> tuple[dict[str, AttributeValue], list[tuple[str, str]]]:
         """Split ``values`` into accepted attributes and ``(key, reason)`` drops.
 
         ``allowed`` narrows the keys further (e.g. to an event's declared attributes).
-        Journey keys and core keys are always allowed if registered.
+        Core keys are exempt from ``allowed`` unless ``core_exempt`` is false (the
+        browser relay: there an event's registered attributes are the whole allowlist).
+        Keys in ``reserved`` are always dropped (reason ``reserved``).
         """
         clean: dict[str, AttributeValue] = {}
         dropped: list[tuple[str, str]] = []
         for key, value in values.items():
+            if key in reserved:
+                dropped.append((key, "reserved"))
+                continue
             spec = self._attributes.get(key)
             if spec is None:
                 dropped.append((key, "unregistered"))
                 continue
-            if allowed is not None and key not in allowed and key not in self.core_keys:
+            exempt = core_exempt and key in self.core_keys
+            if allowed is not None and key not in allowed and not exempt:
                 dropped.append((key, "not_allowed_for_event"))
                 continue
             checked, reason = spec.check(value, self.redactor)

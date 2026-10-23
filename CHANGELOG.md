@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] - unreleased
+
+### Security
+- Event metadata can no longer be overwritten by caller attributes. Journey type, ID and
+  parent, event source and class, duration and the custom-event name are set by
+  hmcts-otel only; a caller (or a browser via the relay) passing one has it dropped and
+  counted on `hmcts.telemetry.dropped_attributes` (reason `reserved`). Before, a browser
+  could relabel its event as a server event in another journey, bypassing `journey_types`.
+  The request ID is reserved too, unless the event registers `hmcts.request.id`
+  explicitly. Browser events accept only the attributes their registration lists: core
+  keys such as `hmcts.outcome` and `hmcts.error.code` are accepted from a browser only
+  where the event lists them. Server-side `record_event` still accepts outcome and error
+  code on any event.
+
 ## [0.2.0] - unreleased
 
 ### Added (OBS-5: AI usage metering)

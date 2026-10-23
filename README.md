@@ -364,6 +364,9 @@ POST /api/telemetry
 ```
 
 - Only events registered with `browser=True` are accepted. Unknown attributes are dropped.
+- A browser event carries only the attributes its registration lists. Event metadata
+  (journey, `hmcts.event.source`, `hmcts.event.class`, `hmcts.duration_ms`, and
+  `hmcts.request.id` unless listed) is set by the server and never taken from attributes.
 - **Operational** events are accepted regardless of analytics consent.
   **Analytics** events need `analytics_consent` to return true.
 - `Content-Type: application/json` only (415 otherwise), so cross-site forms cannot post events with the user's cookies.
