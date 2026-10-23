@@ -36,6 +36,16 @@ keys as a hash.
   bounded at 256 characters, and username-only or empty-password URLs were not matched.
   Credentials whose `@` lies past the inspected prefix of a very long text are redacted up
   to the cut, and `matches()` reports them.
+- **Secret-named structured values are redacted.** In Sentry events (extra, contexts,
+  breadcrumbs, transactions), log `extra=` fields and exported span and log attributes, a
+  value under a secret-named key (`AccountKey`, `password`, `x-api-key`, `client_secret`,
+  `Authorization`, `connection_string`, ...; `is_secret_key()`) is replaced by
+  `[REDACTED]`. A key and its value are checked apart there, so they never formed the
+  `key=value` pair the rules look for.
+- **Static service metadata is redacted in JSON logs.** The service name, environment and
+  version are added after the redaction filter has run, so the formatter now redacts them.
+- **The prohibited-content scan searches each exported string whole**, so a match longer
+  than the old window overlap (a long URL with a query) is found.
 - **URL credentials are removed before the email rule runs**, so
   `https://user:password@host.domain/path` no longer keeps the username.
 

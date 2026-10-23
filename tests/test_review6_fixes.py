@@ -242,3 +242,106 @@ def test_userinfo_rule_stays_linear_time(text: str) -> None:
     default_redactor.redact(text)
     default_redactor.matches(text)
     assert time.perf_counter() - start < 0.5
+
+
+# Round 5: long-URL scan, secret-named keys, static metadata --------------------------
+
+
+def test_the_prohibited_content_scan_finds_a_query_in_a_very_long_string() -> None:
+    # Exported strings the scan checks can be longer than the old window (attributes joined
+    # as JSON, for example); a match longer than the window overlap was missed.
+    from hmcts_otel.testing import _matching_rules
+
+    text = "https://example.test/" + "a" * 70_000 + "?q=PRIVATE_SENTINEL"
+    assert "url_query" in _matching_rules(default_redactor.rules, text)
+    assert _matching_rules(default_redactor.rules, "https://example.test/" + "a" * 70_000) == []
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "AccountKey",
+        "password",
+        "db.password",
+        "x-api-key",
+        "AzureStorageAccountKey",
+        "client_secret",
+        "Authorization",
+        "access_token",
+        "SharedAccessSignature",
+        "connection_string",
+        "privateKey",
+    ],
+)
+def test_secret_named_keys_are_recognised(key: str) -> None:
+    from hmcts_otel.redaction import is_secret_key
+
+    assert is_secret_key(key)
+
+
+@pytest.mark.parametrize(
+    "key", ["design", "token_count", "assignment", "config", "key", "account", "secretary", "sigma"]
+)
+def test_ordinary_keys_are_not_secret(key: str) -> None:
+    from hmcts_otel.redaction import is_secret_key
+
+    assert not is_secret_key(key)
+
+
+def test_sentry_drops_secret_named_structured_values() -> None:
+    from hmcts_otel.sentry import scrub_event
+
+    event = {
+        "extra": {"AccountKey": "FICTIONAL_CREDENTIAL", "note": "ok"},
+        "breadcrumbs": {"values": [{"data": {"x-api-key": "FICTIONAL_CREDENTIAL"}}]},
+        "contexts": {"db": {"connection_string": "FICTIONAL_CREDENTIAL"}},
+    }
+    out = scrub_event(event, default_redactor)
+    assert "FICTIONAL_CREDENTIAL" not in str(out)
+    assert out["extra"]["note"] == "ok"
+
+
+def test_secret_named_log_extras_and_span_attributes_are_redacted(capsys: pytest.CaptureFixture[str]) -> None:
+    import logging
+
+    from hmcts_otel import get_tracer
+
+    settings = TelemetrySettings(
+        service_name="test", environment="test", connection_string=None, sentry_dsn=None, log_format="json"
+    )
+    with capture_telemetry(settings) as tel:
+        logging.getLogger("app").warning("saved", extra={"api_key": "FICTIONAL_CREDENTIAL", "count": 3})
+        with get_tracer().start_as_current_span("call") as span:
+            span.set_attribute("http.request.header.authorization", "FICTIONAL_CREDENTIAL")
+        tel.assert_no_prohibited_content("FICTIONAL_CREDENTIAL")  # exported logs and spans
+    assert "FICTIONAL_CREDENTIAL" not in capsys.readouterr().out  # the JSON stdout lines
+
+
+def test_static_service_metadata_is_redacted_in_json_logs(capsys: pytest.CaptureFixture[str]) -> None:
+    import json
+    import logging
+
+    settings = TelemetrySettings(
+        service_name="fictional.person@example.test",
+        environment="test",
+        connection_string=None,
+        sentry_dsn=None,
+        log_format="json",
+        strict=False,
+    )
+    with capture_telemetry(settings):
+        logging.getLogger("app").warning("plain")
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
+    assert lines and all("fictional.person@example.test" not in json.dumps(line) for line in lines)
+
+
+# Rule changes applied on GitHub (a54e756, c23498f) -----------------------------------
+
+
+def test_single_quoted_secret_keys_are_redacted() -> None:
+    assert "FICTIONAL" not in default_redactor.redact("{'password': 'FICTIONAL_PASSWORD'}")
+
+
+def test_relative_path_queries_with_reserved_characters_are_redacted() -> None:
+    out = default_redactor.redact("GET /files/a!b,c;d=e:f@g/report?token=QUERY_SENTINEL HTTP/1.1")
+    assert "QUERY_SENTINEL" not in out and "?[REDACTED]" in out
