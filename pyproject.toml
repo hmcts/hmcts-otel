@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hmcts-otel"
-version = "0.1.0"
+version = "0.2.0"
 description = "Privacy-safe OpenTelemetry setup for HMCTS Python services on Azure"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -52,6 +52,8 @@ dev = [
     "hatch>=1.14.0",
     "ruff>=0.8.0",
     "pyright>=1.1.380",
+    # Tests of instrument_litellm() only: litellm is never a runtime dependency.
+    "litellm>=1.70.0",
 ]
 
 [tool.hatch.build.targets.wheel]

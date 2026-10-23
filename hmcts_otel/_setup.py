@@ -122,10 +122,39 @@ def _metric_views() -> list[Any]:
     from hmcts_otel import conventions as c
 
     buckets = ExplicitBucketHistogramAggregation(boundaries=list(c.DURATION_BUCKETS_S))
+    token_buckets = ExplicitBucketHistogramAggregation(boundaries=[float(b) for b in c.GEN_AI_TOKEN_BUCKETS])
     return [
         View(instrument_name=c.METRIC_STAGE_DURATION, aggregation=buckets),
         View(instrument_name=c.METRIC_EVENT_DURATION, aggregation=buckets),
+        View(instrument_name=c.METRIC_GEN_AI_TOKEN_USAGE, aggregation=token_buckets),
     ]
+
+
+# Variables that switch prompt/response content capture on in GenAI instrumentation:
+# the OpenTelemetry GenAI instrumentations (openai-v2, google-genai, vertexai, ...)
+# and the Azure AI SDKs' tracing. All default to off; setup makes that explicit, so
+# instrumentation added later by a service, or by a dependency, starts without content.
+GENAI_CONTENT_CAPTURE_VARIABLES = (
+    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
+    "AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED",
+)
+_CONTENT_OFF = frozenset({"", "false", "0", "no_content"})
+
+
+def _genai_content_defaults() -> None:
+    """Default GenAI content capture to off. An explicit opt-in is kept, with a warning
+    (content attributes are still removed from exported spans)."""
+    try:
+        for name in GENAI_CONTENT_CAPTURE_VARIABLES:
+            value = os.environ.get(name)
+            if value is None:
+                os.environ[name] = "false"
+            elif value.strip().lower() not in _CONTENT_OFF:
+                _log.warning(
+                    "hmcts_otel: %s is enabled; GenAI instrumentation may capture prompt and response content", name
+                )
+    except Exception:  # pragma: no cover - os.environ does not fail in practice
+        pass
 
 
 def _setup_azure(
@@ -288,6 +317,7 @@ def setup_telemetry(
             _check_tracer_provider(settings)
         STATE.settings = settings
         STATE.redactor = redactor
+        _genai_content_defaults()
         _span_exceptions.install()
         STATE.handlers = configure_logging(settings, redactor)
         if invalid_fields:

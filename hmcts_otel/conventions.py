@@ -83,6 +83,72 @@ DURATION_BUCKETS_S: tuple[float, ...] = (
     3600,
 )
 
+# --- AI usage metering (OBS-5) ------------------------------------------------------
+# Usage only: token counts and audio seconds. No prices and no cost: cost comes from
+# Azure and GCP billing, allocated by usage share at query time. No prompt or
+# response content is ever recorded.
+#
+# GenAI names follow the OpenTelemetry GenAI semantic conventions at this version,
+# the first with ``gen_ai.provider.name`` (which replaced ``gen_ai.system``). Checked
+# unchanged against opentelemetry-semantic-conventions 0.66b1 (schema 1.44.0), where
+# the GenAI conventions are marked as moved to the semantic-conventions-genai repo.
+GEN_AI_SEMCONV_VERSION = "1.37.0"
+
+GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
+GEN_AI_PROVIDER_NAME = "gen_ai.provider.name"
+GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
+GEN_AI_RESPONSE_MODEL = "gen_ai.response.model"
+GEN_AI_TOKEN_TYPE = "gen_ai.token.type"
+# OpenTelemetry's general attribute: the exception class name of a failed call.
+ERROR_TYPE = "error.type"
+
+AI_FEATURE = "hmcts.ai.feature"
+AI_FALLBACK = "hmcts.ai.fallback"
+SPEECH_MODE = "hmcts.speech.mode"
+
+# Value used for a missing feature, or a provider, model, mode or outcome that failed
+# validation.
+UNKNOWN = "unknown"
+
+
+class TokenType(StrEnum):
+    INPUT = "input"
+    OUTPUT = "output"
+
+
+class SpeechMode(StrEnum):
+    """How audio was transcribed (Azure Speech billing differs by mode)."""
+
+    REALTIME = "realtime"
+    FAST = "fast"
+    BATCH = "batch"
+
+
+# Semantic-convention histogram, one point per token type per call.
+METRIC_GEN_AI_TOKEN_USAGE = "gen_ai.client.token.usage"
+# One per call, with the error type on failures.
+METRIC_AI_REQUESTS = "hmcts.ai.requests"
+# Speech has no semantic convention.
+METRIC_SPEECH_AUDIO_DURATION = "hmcts.speech.audio.duration"
+
+# Bucket boundaries recommended by the semantic conventions for gen_ai.client.token.usage.
+GEN_AI_TOKEN_BUCKETS: tuple[int, ...] = (
+    1,
+    4,
+    16,
+    64,
+    256,
+    1024,
+    4096,
+    16384,
+    65536,
+    262144,
+    1048576,
+    4194304,
+    16777216,
+    67108864,
+)
+
 # Set on exception events whose stack trace hmcts-otel built from the exception object.
 # Exception text without it came from outside the package and is exported as the
 # type only (see _scrubbing.scrub_attributes). Removed before export.
