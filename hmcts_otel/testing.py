@@ -14,7 +14,7 @@ Example (pytest)::
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -25,13 +25,46 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from hmcts_otel import conventions as c
 from hmcts_otel._setup import is_configured, setup_telemetry, shutdown_telemetry
-from hmcts_otel.redaction import Redactor, default_redactor
+from hmcts_otel.redaction import _REDACTION_MARGIN, MAX_TEXT_LENGTH, RedactionRule, Redactor, default_redactor
 from hmcts_otel.settings import TelemetrySettings
 
 
 def _log_record(item: Any) -> Any:
     # Exported items are ReadableLogRecord (or LogData on older SDKs); both expose .log_record.
     return getattr(item, "log_record", item)
+
+
+def _as_text(value: Any) -> str:
+    return value if isinstance(value, str) else json.dumps(value, default=str)
+
+
+def _attribute_strings(where: str, attributes: Any) -> Iterator[tuple[str, str]]:
+    for k, (key, value) in enumerate(dict(attributes or {}).items()):
+        yield f"{where} #{k} key", str(key)
+        yield f"{where} #{k}", _as_text(value)
+
+
+# Rules are checked in windows of what Redactor.matches() looks at, overlapping by more
+# than the longest bounded default match (a JWT, 3 x 8,192 characters), so a match that
+# straddles one window boundary lies whole in the next window. Searching with pos and
+# endpos (not slices) keeps word boundaries and lookbehinds correct at window edges.
+_SCAN_WINDOW = MAX_TEXT_LENGTH + _REDACTION_MARGIN
+_SCAN_OVERLAP = 3 * 8_192 + 2_048
+
+
+def _matching_rules(rules: Iterable[RedactionRule], text: str) -> list[str]:
+    """Names of the rules matching anywhere in ``text``, however long it is."""
+    found: list[str] = []
+    for rule in rules:
+        start = 0
+        while True:
+            if rule.pattern.search(text, start, min(len(text), start + _SCAN_WINDOW)):
+                found.append(rule.name)
+                break
+            if start + _SCAN_WINDOW >= len(text):
+                break
+            start += _SCAN_WINDOW - _SCAN_OVERLAP
+    return found
 
 
 @dataclass
@@ -107,16 +140,55 @@ class TelemetryCapture:
                             parts.append(json.dumps(dict(p.attributes or {}), default=str))
         return "\n".join(parts)
 
+    def exported_strings(self) -> Iterator[tuple[str, str]]:
+        """Every exported string with where it came from, e.g. ``("log record #3 body", ...)``.
+
+        The location names the part (span, event, link, log record, metric point and the
+        index of the attribute), never its content. Non-string values are given as JSON.
+        """
+        for i, span in enumerate(self.finished_spans()):
+            where = f"span #{i}"
+            yield f"{where} name", str(span.name)
+            yield from _attribute_strings(f"{where} attribute", span.attributes)
+            if span.status.description:
+                yield f"{where} status", span.status.description
+            for j, event in enumerate(span.events):
+                yield f"{where} event #{j} name", str(event.name)
+                yield from _attribute_strings(f"{where} event #{j} attribute", event.attributes)
+            for j, link in enumerate(span.links):
+                yield from _attribute_strings(f"{where} link #{j} attribute", link.attributes)
+        for i, record in enumerate(self.log_records()):
+            where = f"log record #{i}"
+            if record.body is not None:
+                yield f"{where} body", _as_text(record.body)
+            event_name = getattr(record, "event_name", None)
+            if event_name:
+                yield f"{where} event name", str(event_name)
+            yield from _attribute_strings(f"{where} attribute", record.attributes)
+        data = self.metrics.get_metrics_data()
+        if data is not None:
+            for rm in data.resource_metrics:
+                for sm in rm.scope_metrics:
+                    for metric in sm.metrics:
+                        for j, p in enumerate(metric.data.data_points):
+                            yield from _attribute_strings(f"metric {metric.name!r} point #{j} attribute", p.attributes)
+
     # Assertions -------------------------------------------------------------------
 
     def assert_no_prohibited_content(self, *needles: str, redactor: Redactor | None = None) -> None:
         """Fail if any needle, or anything matching a redaction rule, appears in exported telemetry.
 
-        The failure message names the needle index or rule, never the matched content.
+        Needles are searched for in all exported text. Rules are checked against each
+        exported string separately and in full (a long string in overlapping windows),
+        so a match in a late record or at the end of a long string is found. The
+        failure message names the needle index, or the rule and where it matched, never
+        the matched content.
         """
         text = self.all_exported_text()
         problems = [f"needle #{i}" for i, needle in enumerate(needles) if needle and needle in text]
-        problems += [f"rule '{name}'" for name in (redactor or default_redactor).matches(text)]
+        rules = (redactor or default_redactor).rules
+        for where, value in self.exported_strings():
+            problems += [f"rule '{name}' in {where}" for name in _matching_rules(rules, value)]
         if problems:
             raise AssertionError("prohibited content in exported telemetry: " + ", ".join(problems))
 
