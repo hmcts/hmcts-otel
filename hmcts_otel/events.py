@@ -151,7 +151,7 @@ def _record(
 
     _events_log.info(name, extra=extra)
 
-    metric_attrs = {"event": name, "class": cls.value, "source": source.value}
+    metric_attrs = {"event": _guard.safe_dimension(name), "class": cls.value, "source": source.value}
     _state.instrument("counter", c.METRIC_EVENTS, unit="{event}", description="Events recorded").add(1, metric_attrs)
     if duration_ms is not None:
         _state.instrument(

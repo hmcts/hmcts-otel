@@ -11,6 +11,20 @@ No API changes. **Behaviour notes:** some lines are now redacted further than be
 (see "Changed"), and dropped-attribute warnings for browser events show unregistered
 keys as a hash.
 
+### Fixed (PR #4 review, round 4)
+- **A JWT straddling the truncation boundary is fully redacted.** Redaction runs on a
+  prefix longer than the text cap; the margin now covers the longest default match (a
+  JWT of up to three 8,192-character segments), derived from the rule's bounds.
+- **Metric dimensions follow the active redactor.** Stage names, error codes, journey
+  types and event names recorded on `hmcts.stage.duration`, `hmcts.events` and
+  `hmcts.event.duration` are checked against the redactor configured by
+  `setup_telemetry(redactor=...)`; a matching value is recorded as `redacted` and counted
+  as `invalid.metric_dimension`. Schemas created without an explicit redactor now follow
+  the configured one too, so custom rules also reject matching attribute values and
+  identifiers (strict mode raises).
+- **URL credentials are removed before the email rule runs**, so
+  `https://user:password@host.domain/path` no longer keeps the username.
+
 ### Fixed (PR #4 review, round 3)
 - **The relay rate limiter has a hard capacity.** At most `max_keys` (10,000) identities
   are tracked. Expired buckets are pruned only when a new identity arrives at capacity,

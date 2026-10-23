@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 from hmcts_otel import conventions as c
 from hmcts_otel.conventions import EventClass, EventSource, Outcome, SpeechMode
-from hmcts_otel.redaction import Redactor, default_redactor
+from hmcts_otel.redaction import Redactor
 
 AttributeValue = str | bool | int | float
 
@@ -155,12 +155,27 @@ class TelemetrySchema:
         self._attributes: dict[str, AttributeSpec] = {}
         self._events: dict[str, EventSpec] = {}
         self._lock = threading.Lock()
-        self.redactor = redactor or default_redactor
+        self._redactor = redactor
         self.core_keys: frozenset[str] = frozenset()
         if include_core:
             for spec in _core_attributes():
                 self._attributes[spec.name] = spec
             self.core_keys = frozenset(self._attributes)
+
+    @property
+    def redactor(self) -> Redactor:
+        """The redactor validation uses: the one given to this schema, otherwise the
+        redactor configured by ``setup_telemetry`` (so custom rules apply), otherwise
+        the default."""
+        if self._redactor is not None:
+            return self._redactor
+        from hmcts_otel import _state  # imported here: _state is set up after schemas
+
+        return _state.current_redactor()
+
+    @redactor.setter
+    def redactor(self, value: Redactor) -> None:
+        self._redactor = value
 
     # Registration -----------------------------------------------------------------
 

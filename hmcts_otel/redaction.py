@@ -43,6 +43,9 @@ def _keep_url(match: re.Match[str]) -> str:
 # each rule runs in linear time on adversarial input (long runs of letters, dots,
 # slashes, "http://"). See tests/test_redaction.py::test_rules_are_linear_time.
 DEFAULT_RULES: tuple[RedactionRule, ...] = (
+    # URL credentials first: the email rule would otherwise consume "password@host.domain"
+    # and leave the username behind ("https://user:[REDACTED]/path").
+    RedactionRule("url_userinfo", re.compile(r"(?i)(?<=://)[^/\s:@]{1,256}:[^/\s@]{1,256}@")),
     RedactionRule(
         "email",
         # Local part: the RFC 5322 dot-atom set (o'brien@..., foo!bar@...), bounded.
@@ -86,7 +89,6 @@ DEFAULT_RULES: tuple[RedactionRule, ...] = (
         ),
         _keep_key,
     ),
-    RedactionRule("url_userinfo", re.compile(r"(?i)(?<=://)[^/\s:@]{1,256}:[^/\s@]{1,256}@")),
     # Query strings of absolute URLs (search terms, tokens, identifiers), e.g. in
     # httpx's "HTTP Request: GET https://...?..." INFO logs.
     RedactionRule(
@@ -109,7 +111,12 @@ DEFAULT_RULES: tuple[RedactionRule, ...] = (
 # rules applications add). Redaction runs on a slightly longer prefix so a secret
 # straddling the cut is still matched in full.
 MAX_TEXT_LENGTH = 32_768
-_REDACTION_MARGIN = 3 * 8_192 + 2_048
+# The margin must cover the longest match of any default rule that can start before the
+# cut, so a secret straddling it is still matched in full. The longest is the JWT rule:
+# "eyJ" + three segments of up to 8,192 characters and two dots (24,579 characters).
+_JWT_SEGMENT_MAX = 8_192
+_LONGEST_DEFAULT_MATCH = len("eyJ") + 3 * _JWT_SEGMENT_MAX + 2
+_REDACTION_MARGIN = _LONGEST_DEFAULT_MATCH + 2_048
 TRUNCATED = "...[truncated]"
 
 

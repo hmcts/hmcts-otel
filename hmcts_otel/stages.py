@@ -243,10 +243,10 @@ def _finish(handle: StageHandle, span: Span, duration_s: float, exc: BaseExcepti
     _duration_histogram().record(
         duration_s,
         {
-            c.STAGE: handle.name,
+            c.STAGE: _guard.safe_dimension(handle.name),
             c.OUTCOME: handle.outcome.value,
-            c.ERROR_CODE: handle.error_code or "none",
-            c.JOURNEY_TYPE: current.type if current is not None else "none",
+            c.ERROR_CODE: _guard.safe_dimension(handle.error_code) if handle.error_code else "none",
+            c.JOURNEY_TYPE: _guard.safe_dimension(current.type) if current is not None else "none",
         },
     )
     record_event(
