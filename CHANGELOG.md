@@ -27,6 +27,10 @@ keys as a hash.
   cut off, or a token truncated before its first dot, from 16 characters) are redacted
   whole. Previously a bearer token over 4,096 characters kept its tail and an oversized
   JWT was not redacted at all. Possessive quantifiers keep both rules linear-time.
+- **Long URLs keep no query string.** The absolute-URL rule had a 2,048-character bound
+  on the part before `?`, and the relative-path rule likewise, so a longer URL exported its
+  query unchanged. Both now match any length in linear time (the absolute-URL part never
+  crosses another `http(s)://`, so repeated scheme prefixes stay cheap).
 - **URL credentials are removed before the email rule runs**, so
   `https://user:password@host.domain/path` no longer keeps the username.
 
