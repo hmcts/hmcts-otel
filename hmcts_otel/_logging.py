@@ -68,12 +68,15 @@ class RedactingFilter(logging.Filter):
         # here would reach the logging call site (and could replace an exception
         # being handled there). Fail closed: keep the record, drop its content.
         try:
+            if record.stack_info:
+                record.stack_info = self._redactor.redact(record.stack_info)
             self._redact(record)
         except Exception as exc:
             record.msg = "[unformattable log record]"
             record.args = None
             record.exc_info = None
             record.exc_text = None
+            record.stack_info = None
             # Extras (``extra=``, context) may be partly or not at all redacted.
             for key in list(_extra_items(record)):
                 del record.__dict__[key]
