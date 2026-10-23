@@ -58,19 +58,24 @@ DEFAULT_RULES: tuple[RedactionRule, ...] = (
         re.compile(
             r"(?i)\b(AccountKey|SharedAccessKey|SharedAccessSignature|sig|password|pwd|secret|client_secret"
             r"|api[_-]?key|access_token|refresh_token)"
-            # key=value, key="value", key='value', "key": "value", key: value
-            r"(\"?\s{0,3}[=:]\s{0,3})(?![\"'{]?\[REDACTED\])("
+            # key=value, key="value", key='value', "key": "value", key: value. Up to
+            # three spaces may follow the separator; they are kept, and never given
+            # back to the value (possessive), so redaction stays idempotent.
+            r"(\"?\s{0,3}[=:]\s{0,3}+)(?![\"'{]?\[REDACTED\])("
             # Quoted: to the closing quote (backslash escapes allowed), or the end of
             # the line if unclosed.
             r"\"(?:[^\"\\\r\n]|\\.){1,4096}\"?"
             r"|'(?:[^'\\\r\n]|\\.){1,4096}'?"
             # ODBC braced: Pwd={two words}
             r"|\{[^}\r\n]{1,256}\}"
-            # Connection string, Password=two words;: after a bare '=', up to ';' or the
-            # end of the line, if no other key=value intervenes.
-            r"|(?<==)[^;=\r\n\"'{}]{1,256}(?=;|\r|\n|\Z)"
-            # Otherwise up to the next delimiter.
-            r"|[^;&\s\"',}]{1,4096})"
+            # Connection string, Password=two words;: after '=' (and any spaces), up to
+            # ';' or the end of the line, if no other key=value intervenes.
+            r"|(?:(?<==)|(?<==\s)|(?<==\s\s)|(?<==\s\s\s))[^;=\r\n\"'{}]{1,256}(?=;|\r|\n|\Z)"
+            # Otherwise words up to the next delimiter (; & , } or a quote), the end of
+            # the line, or the next key=value / key: value pair, so a value with spaces
+            # (password: two words) is redacted whole and a key=value log line keeps its
+            # other fields (password=x user=u1 keeps user=u1).
+            r"|[^;&\s\"',}]{1,4096}(?:[ \t]{1,3}(?![\w.-]{1,64}\s{0,3}[=:])[^;&\s\"',}]{1,4096})*)"
         ),
         _keep_key,
     ),
