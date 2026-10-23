@@ -149,6 +149,14 @@ removed at any depth.
   `path_query` was also quadratic.
   Quoted secret values are matched to their closing quote within the same bound, so a
   value with spaces or delimiters is redacted whole.
+  A secret value longer than its bound (4,096 characters quoted, 256 braced or in a
+  connection string) fails closed: it is redacted to its closing quote or brace if one
+  follows on the same line, otherwise to the end of the line (a connection-string value
+  to the next `;`). Before, the part past the bound was exported. These paths are
+  reached only after a key and never fail, so a match scans at most to the end of its
+  line and redaction stays linear. The cost is that the rest of a line is occasionally
+  over-redacted. Spaces after the separator (`Password= two words`) are kept and the
+  value is still redacted whole.
 - **The logging filter fails closed.** Handler filters run outside logging's own
   error handling, so the filter catches everything and replaces the record's content
   with a placeholder and removes every extra attribute. Exception chains are formatted iteratively and capped at 25.
