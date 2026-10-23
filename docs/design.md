@@ -147,6 +147,8 @@ removed at any depth.
   longer prefix, so a secret straddling the cut is still matched. Before this change,
   logging a 100k-character token blocked the caller for over 5 seconds, and
   `path_query` was also quadratic.
+  Quoted secret values are matched to their closing quote within the same bound, so a
+  value with spaces or delimiters is redacted whole.
 - **The logging filter fails closed.** Handler filters run outside logging's own
   error handling, so the filter catches everything and replaces the record's content
   with a placeholder and removes every extra attribute. Exception chains are formatted iteratively and capped at 25.
