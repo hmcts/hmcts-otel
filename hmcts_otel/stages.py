@@ -251,7 +251,7 @@ def _finish(handle: StageHandle, span: Span, duration_s: float, exc: BaseExcepti
     )
     record_event(
         f"{handle.name}.{_VERB[handle.outcome]}",
-        {c.STAGE: handle.name, **outcome_attrs, **handle.attributes},
+        {**handle.attributes, c.STAGE: handle.name, **outcome_attrs},
         duration_ms=duration_s * 1000.0,
         schema=handle._schema,
     )
