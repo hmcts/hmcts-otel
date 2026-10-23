@@ -1,0 +1,60 @@
+# Fast, non-mutating local tripwire matching the CI lint/secrets gates
+# (.github/workflows/lint.yml, secrets-scanner.yml). Install once with
+# `pre-commit install` (requires `gitleaks` on PATH — `brew install gitleaks`).
+minimum_pre_commit_version: "3.5.0"
+default_install_hook_types: [pre-commit]
+
+repos:
+  # Generic hygiene + syntax validation (non-mutating).
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        name: Block files larger than 5 MB
+        args: ["--maxkb=5120"]
+      - id: detect-private-key
+        name: Detect private keys
+      - id: check-yaml
+        name: Validate YAML syntax
+      - id: check-toml
+        name: Validate TOML syntax
+      - id: check-merge-conflict
+        name: Check for merge conflict markers
+      - id: end-of-file-fixer
+        name: Fix missing end-of-file newline
+      - id: trailing-whitespace
+        name: Trim trailing whitespace
+
+  # Lint + format — mirrors the blocking checks in .github/workflows/lint.yml.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.1
+    hooks:
+      - id: ruff
+        name: Ruff lint
+        args: ["--fix"]
+      - id: ruff-format
+        name: Ruff format
+
+  # Secrets — the pre-installed gitleaks binary (default rules), matching the
+  # CI hmcts/secrets-scanner job. A `system` hook (no Go toolchain); requires
+  # `gitleaks` on PATH. `--staged` scans the pending commit; it is a no-op
+  # under `pre-commit run --all-files`, where CI's separate `scan` job
+  # provides full-history gitleaks coverage.
+  - repo: local
+    hooks:
+      - id: gitleaks
+        name: Detect secrets (gitleaks)
+        entry: gitleaks git --staged --redact --no-banner
+        language: system
+        pass_filenames: false
+
+  # The generated field list (docs/conventions.md) must match hmcts_otel.conventions,
+  # as CI's tests job checks.
+  - repo: local
+    hooks:
+      - id: conventions-doc
+        name: docs/conventions.md is up to date
+        entry: uv run python scripts/generate_conventions.py --check
+        language: system
+        pass_filenames: false
+        files: ^(hmcts_otel/conventions\.py|scripts/generate_conventions\.py|docs/conventions\.md)$

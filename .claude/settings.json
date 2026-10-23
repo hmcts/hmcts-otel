@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if command -v pre-commit >/dev/null 2>&1; then pre-commit install >/dev/null 2>&1 && echo 'pre-commit hook installed'; else echo 'WARNING: pre-commit not found - install it (pip install pre-commit || brew install pre-commit) then run: pre-commit install'; fi"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,70 @@
+name: Lint
+
+# Lint / format / type-check gate.
+#   - ruff check + ruff format --check  → blocking
+#   - pyright                           → blocking
+#   - bandit (medium+ severity)         → blocking; JSON report kept as evidence
+
+on:
+  pull_request:
+    branches: [main]
+    # Skip docs/config-only changes — nothing to lint/type-check.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.claude/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Ruff + Pyright
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Ruff lint
+        run: uv run ruff check . --output-format=github
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Pyright
+        run: uv run pyright
+
+  bandit:
+    name: Bandit (Python security)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+
+      - name: Generate JSON report (evidence)
+        continue-on-error: true
+        run: |
+          uvx bandit --recursive --severity-level medium --confidence-level medium \
+            --format json --output bandit-report.json hmcts_otel/
+
+      - name: Upload bandit report
+        if: always() && hashFiles('bandit-report.json') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: bandit-report
+          path: bandit-report.json
+
+      - name: Fail build on findings
+        run: uvx bandit --recursive --severity-level medium --confidence-level medium hmcts_otel/

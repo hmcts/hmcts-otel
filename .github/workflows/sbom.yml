@@ -1,0 +1,49 @@
+name: SBOM
+
+# CycloneDX software bill of materials for the library's runtime dependencies
+# (all optional extras, no dev tools), kept as a build artefact.
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/sbom.yml'
+  schedule:
+    - cron: '48 6 * * 4'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sbom:
+    name: SBOM (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install runtime dependencies
+        run: uv sync --frozen --extra fastapi --extra sqlalchemy --extra sentry --extra entra
+
+      - name: Generate CycloneDX SBOM
+        run: |
+          uvx --from cyclonedx-bom cyclonedx-py environment \
+            --output-format JSON --output-file sbom.cdx.json .venv
+
+      - name: Log SBOM hash
+        run: sha256sum sbom.cdx.json
+
+      - name: Upload SBOM
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sbom
+          path: sbom.cdx.json

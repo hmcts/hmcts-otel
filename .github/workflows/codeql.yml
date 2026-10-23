@@ -1,0 +1,51 @@
+name: CodeQL
+
+on:
+  pull_request:
+    branches:
+      - main
+    # Skip docs/config-only changes — no code to analyse.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.claude/**'
+
+  schedule:
+    - cron: '36 5 * * 4'
+
+jobs:
+  analyze:
+    name: Analyze (python)
+    # GitHub Advanced Security (code scanning) is disabled at org level for
+    # private/internal repos, so CodeQL cannot upload results and would fail.
+    # Gate on visibility: this job is SKIPPED while the repo is internal/private
+    # and AUTO-ENABLES the moment the repo becomes public — no manual step.
+    if: github.event.repository.visibility == 'public'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        # Details on CodeQL's query packs refer to : https://docs.github.com/en/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-code-scanning#using-queries-in-ql-packs
+        with:
+          languages: python
+          queries: security-extended
+          config-file: ./.github/codeql/codeql-config.yml
+
+      # CodeQL handles autobuild for Python; no manual build step required.
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v4
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:python"
