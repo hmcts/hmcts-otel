@@ -125,6 +125,8 @@ class ContextFilter(logging.Filter):
     """Adds journey and request attributes. Explicit ``extra`` values win."""
 
     def filter(self, record: logging.LogRecord) -> bool:
+        if record.name == EVENTS_LOGGER:
+            return True
         for key, value in context_attributes().items():
             record.__dict__.setdefault(key, value)
         return True
