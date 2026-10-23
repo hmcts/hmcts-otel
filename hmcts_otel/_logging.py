@@ -74,6 +74,9 @@ class RedactingFilter(logging.Filter):
             record.args = None
             record.exc_info = None
             record.exc_text = None
+            # Extras (``extra=``, context) may be partly or not at all redacted.
+            for key in list(_extra_items(record)):
+                del record.__dict__[key]
             try:
                 from hmcts_otel import _guard
 

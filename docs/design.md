@@ -149,7 +149,7 @@ removed at any depth.
   `path_query` was also quadratic.
 - **The logging filter fails closed.** Handler filters run outside logging's own
   error handling, so the filter catches everything and replaces the record's content
-  with a placeholder. Exception chains are formatted iteratively and capped at 25.
+  with a placeholder and removes every extra attribute. Exception chains are formatted iteratively and capped at 25.
 - **Setup degrades instead of crashing.** Invalid settings fall back to defaults
   (`load_settings`). An exporter or Sentry failure rolls back exporter handlers and
   leaves stdout logging. A tracer provider registered by an earlier attempt in the same

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
+from collections.abc import Iterator
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -13,7 +16,9 @@ from hmcts_otel import EventClass, TelemetrySchema, journey, record_event
 from hmcts_otel import conventions as c
 from hmcts_otel.context import request_id_context
 from hmcts_otel.fastapi import RequestIdMiddleware, create_telemetry_relay_router
-from hmcts_otel.testing import TelemetryCapture
+from hmcts_otel.redaction import default_redactor
+from hmcts_otel.settings import TelemetrySettings
+from hmcts_otel.testing import TelemetryCapture, capture_telemetry
 
 SESSION = "dictation.session"
 
@@ -195,3 +200,37 @@ def test_relay_keeps_a_uuid_parent_id_when_allowed(tel: TelemetryCapture) -> Non
     (ev,) = tel.events("ui.clicked")
     assert ev[c.JOURNEY_PARENT_ID] == parent
     tel.assert_no_prohibited_content("07700900123")
+
+
+# --- #2: a failed redaction forwards no extras ---------------------------------------
+
+SENTINEL = "sentinel@example.test"
+
+
+@pytest.fixture
+def lenient() -> Iterator[TelemetryCapture]:
+    settings = TelemetrySettings(
+        service_name="t", connection_string=None, sentry_dsn=None, log_format="json", strict=False
+    )
+    with capture_telemetry(settings) as capture:
+        yield capture
+
+
+def _broken(self: Any, *args: Any) -> Any:
+    raise RuntimeError("redactor broken")
+
+
+@pytest.mark.parametrize("method", ["_redact", "_safe_extra"])
+def test_failed_redaction_drops_extras(
+    lenient: TelemetryCapture, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    monkeypatch.setattr(f"hmcts_otel._logging.RedactingFilter.{method}", _broken)
+    logging.getLogger("app").warning("contact %s", SENTINEL, extra={"person": SENTINEL, "case.ref": [SENTINEL]})
+    (record,) = [r for r in lenient.log_records() if r.body == "[unformattable log record]"]
+    assert "person" not in dict(record.attributes or {})
+    lenient.assert_no_prohibited_content(SENTINEL)
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
+    (line,) = [entry for entry in lines if entry.get("logger") == "app"]
+    assert line["message"] == "[unformattable log record]" and line["level"] == "WARNING"
+    assert SENTINEL not in json.dumps(line)
+    assert not default_redactor.matches(json.dumps(line))
