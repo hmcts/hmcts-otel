@@ -62,3 +62,11 @@ def internal_error(kind: str, exc: BaseException | None = None) -> None:
     """Report an internal failure. Never raises."""
     _count(f"internal.{kind}")
     _log_once(f"internal.{kind}", type(exc).__name__ if exc is not None else "error")
+
+
+def invalid_data(kind: str) -> None:
+    """Report a bad value that came from data rather than code, e.g. a model name or
+    token count from a provider response. Counted and logged once like misuse, but
+    never raised, even in strict mode: the caller cannot fix the provider."""
+    _count(f"invalid.{kind}")
+    _log_once(f"invalid.{kind}", "invalid value replaced or ignored")

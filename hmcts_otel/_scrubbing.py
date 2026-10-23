@@ -31,6 +31,35 @@ _log = logging.getLogger(__name__)
 _QUERY_KEYS = frozenset({"url.query"})
 _URL_KEYS = frozenset({"url.full", "http.url", "http.target", "url.path"})
 _MESSAGE_KEYS = frozenset({"exception.message"})
+# Prompt and response content written by GenAI instrumentation (OpenTelemetry GenAI
+# semantic conventions, older indexed forms such as gen_ai.prompt.0.content used by
+# litellm's and OpenLLMetry's integrations, and OpenInference). Dropped, never
+# redacted: content cannot be made safe by pattern matching.
+_GENAI_CONTENT_PREFIXES = (
+    "gen_ai.prompt",
+    "gen_ai.completion",
+    "gen_ai.input.messages",
+    "gen_ai.output.messages",
+    "gen_ai.system_instructions",
+    "gen_ai.tool.call.arguments",
+    "gen_ai.tool.call.result",
+    "gen_ai.tool.definitions",
+    "gen_ai.retrieval.query.text",
+    "gen_ai.retrieval.documents",
+    "gen_ai.embeddings.input",
+    "gen_ai.event.content",
+    "llm.prompts",
+    "llm.completions",
+    "llm.input_messages",
+    "llm.output_messages",
+    "input.value",
+    "output.value",
+)
+
+
+def is_genai_content_key(key: str) -> bool:
+    """True for an attribute that carries GenAI prompt or response content."""
+    return any(key == p or key.startswith(p + ".") for p in _GENAI_CONTENT_PREFIXES)
 
 
 _FRAME = re.compile(r'^\s*File "')
@@ -155,7 +184,7 @@ def scrub_attributes(
     route = route if isinstance(route, str) and route else None
     out: dict[str, Any] = {}
     for key, value in attributes.items():
-        if key == EXCEPTION_FORMATTED:
+        if key == EXCEPTION_FORMATTED or is_genai_content_key(key):
             continue
         if key in _QUERY_KEYS:
             out[key] = REDACTED if value else value
