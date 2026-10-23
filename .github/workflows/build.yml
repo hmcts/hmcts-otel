@@ -5,8 +5,8 @@ name: Build
 # libraries publish to (mirrors api-cp-caseadmin-case-urn-mapper's ci-draft /
 # ci-released Gradle publish, but for a Python artefact via twine).
 #
-#   push to main        -> draft candidate version   (artefact-version draft)
-#   published release   -> release version           (artefact-version release)
+#   push to main        -> <pyproject version>.dev<run>+<sha>   (draft)
+#   published release   -> <pyproject version>, = the tag        (release)
 #
 # Auth is basic auth to Azure Artifacts using the org secrets
 # AZURE_DEVOPS_ARTIFACT_USERNAME / AZURE_DEVOPS_ARTIFACT_TOKEN (same as Gradle).
@@ -54,8 +54,10 @@ jobs:
           name: dist
           path: dist/
 
-  # Compute the artefact version the HMCTS-standard way (same action the Java
-  # libraries use): a draft version on push, a release version on a Release.
+  # Compute the artefact version. The base is always the version in pyproject.toml;
+  # hmcts/artefact-version-action (the action the Java libraries use) supplies only
+  # the commit SHA for drafts and the tag for releases. Its draft base comes from the
+  # latest v* tag (0.0.0 without one), so it is not used. See docs/releasing.md.
   artefact-version:
     name: Artefact Version
     if: github.event_name == 'push' || github.event_name == 'release'
@@ -65,7 +67,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0 # full history for accurate versioning
+          fetch-depth: 0 # the action runs git describe
 
       - name: Generate artefact version
         id: artefact
@@ -77,12 +79,17 @@ jobs:
 
       - name: Select draft/release version
         id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+          RUN_NUMBER: ${{ github.run_number }}
+          DRAFT_VERSION: ${{ steps.artefact.outputs.draft_version }}
+          RELEASE_VERSION: ${{ steps.artefact.outputs.release_version }}
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            echo "version=${{ steps.artefact.outputs.release_version }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=${{ steps.artefact.outputs.draft_version }}" >> "$GITHUB_OUTPUT"
-          fi
+          # Drafts: "<pyproject version>.dev<run_number>+<sha>" (e.g. 0.2.1.dev47+46dfd2f).
+          # Releases: the pyproject version, which must match the release tag.
+          VERSION="$(scripts/artefact_version.sh)"
+          echo "Artefact version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
   publish:
     name: Publish to Azure Artifacts (hmcts-lib)
@@ -99,29 +106,19 @@ jobs:
 
       - name: Set the artefact version and build
         env:
-          RAW_VERSION: ${{ needs.artefact-version.outputs.version }}
+          VERSION: ${{ needs.artefact-version.outputs.version }}
         run: |
-          # Draft builds (push to main) get a PEP 440 dev release + local SHA,
-          # "<base>.dev<run_number>+<sha>" (e.g. 0.2.0.dev47+46dfd2f) — the same
-          # form setuptools-scm / from-source builds use. The .dev<n> gives
-          # correct ordering across drafts; the +<sha> is the commit (a hex SHA
-          # is only PEP 440-legal in the "+" local segment). A published release
-          # uses the clean release version as-is (no +local).
-          if [ "${{ github.event_name }}" = "release" ]; then
-            VERSION="$RAW_VERSION"
-          else
-            BASE="${RAW_VERSION%%-*}"          # e.g. 0.2.0
-            SHA="${RAW_VERSION#*-}"            # e.g. 46dfd2f
-            if [ "$SHA" = "$RAW_VERSION" ]; then
-              VERSION="${BASE}.dev${{ github.run_number }}"          # no SHA in source version
-            else
-              VERSION="${BASE}.dev${{ github.run_number }}+${SHA}"
-            fi
-          fi
+          # VERSION is PEP 440: "<base>.dev<n>+<sha>" for a draft, "<base>" for a
+          # release (see scripts/artefact_version.sh). The .dev<n> orders drafts;
+          # a hex SHA is only legal in the "+" local segment.
+          test -n "$VERSION"
           echo "Publishing hmcts-otel version: $VERSION"
           sed -i.bak -E "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
           rm -f pyproject.toml.bak
+          grep -qxF "version = \"$VERSION\"" pyproject.toml
           uv build
+          # Fail if the built wheel does not carry the computed version.
+          test -f "dist/hmcts_otel-${VERSION}-py3-none-any.whl"
 
       - name: Publish to the hmcts-lib PyPI feed
         env:
