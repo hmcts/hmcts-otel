@@ -22,16 +22,33 @@ attributes and events in their schema and should publish the same table, using
 | `hmcts.event.duration` | histogram | s | `event`, `class`, `source` |
 | `hmcts.telemetry.dropped_attributes` | counter | attribute | `reason`, `where` |
 | `hmcts.telemetry.errors` | counter | error | `kind` (`invalid.*` misuse, `internal.*` failures) |
+| `gen_ai.client.token.usage` | histogram | token | `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.response.model`, `hmcts.ai.feature`, `hmcts.outcome`, `hmcts.ai.fallback`, `gen_ai.token.type` (`input`, `output`) |
+| `hmcts.ai.requests` | counter | request | `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.response.model`, `hmcts.ai.feature`, `hmcts.outcome`, `hmcts.ai.fallback`, `error.type` (failures: exception class name) |
+| `hmcts.speech.audio.duration` | counter | s | `hmcts.speech.mode`, `hmcts.ai.feature`, `hmcts.outcome` |
 
 Duration histograms use bucket boundaries (seconds): `0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1800, 3600`.
 In App Insights only count, sum, min and max are kept; compute percentiles from events.
 
 Journey IDs are never metric dimensions.
 
+### AI usage
+
+`gen_ai.client.token.usage` and the `gen_ai.*` attributes follow the OpenTelemetry GenAI
+semantic conventions **v1.37.0** (`gen_ai.provider.name`, which replaced
+`gen_ai.system`). One point per token type per call. `gen_ai.response.model` is present when
+known. Token buckets: `1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864`.
+
+Usage only: no prices and no cost (allocate billing by usage share). No prompt or response
+content is ever recorded. Providers, models and features that fail validation are recorded as
+`unknown` (`invalid_feature` for a malformed feature); a missing feature falls back to the
+current stage, then `unknown`.
+
 ## Core attributes
 
 | Attribute | Type | Rule | Description |
 |---|---|---|---|
+| `hmcts.ai.fallback` | bool | — | Whether an AI call was a fallback to another model. |
+| `hmcts.ai.feature` | str | matches `[a-z][a-z0-9_.]{0,63}` | Product feature an AI call served, e.g. summarise. Defaults to the current stage. |
 | `hmcts.dependency.ref` | str | matches `[A-Za-z0-9_.:-]{1,128}` | Reference in an external system, e.g. Azure Speech job ID. |
 | `hmcts.duration_ms` | float | — | Duration in milliseconds. |
 | `hmcts.error.code` | str | matches `[A-Za-z0-9_.:-]{1,64}` | Controlled error code. Never a message. |
@@ -42,4 +59,5 @@ Journey IDs are never metric dimensions.
 | `hmcts.journey.type` | str | matches `[a-z0-9][a-z0-9_.-]{0,63}` | Kind of journey, e.g. upload.job or user.session. |
 | `hmcts.outcome` | str | one of `cancelled`, `error`, `failure`, `success` | Stage outcome. |
 | `hmcts.request.id` | str | matches `[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32}` | Request correlation ID (UUID or 32 hex). |
+| `hmcts.speech.mode` | str | one of `batch`, `fast`, `realtime` | Speech transcription mode. |
 | `hmcts.stage` | str | matches `[a-z][a-z0-9_.]{0,63}` | Stage name. |

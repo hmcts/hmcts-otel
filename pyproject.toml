@@ -52,6 +52,8 @@ dev = [
     "hatch>=1.14.0",
     "ruff>=0.8.0",
     "pyright>=1.1.380",
+    # Tests of instrument_litellm() only: litellm is never a runtime dependency.
+    "litellm>=1.70.0",
 ]
 
 [tool.hatch.build.targets.wheel]
