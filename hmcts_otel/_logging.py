@@ -98,10 +98,15 @@ class RedactingFilter(logging.Filter):
                 message = str(record.msg)
             except Exception:
                 message = "[unformattable log message]"
+        from hmcts_otel._scrubbing import is_genai_content_key
+
         record.msg = self._redactor.redact(message)
         record.args = None
         formatted_here = record in _FORMATTED_RECORDS
         for key, value in _extra_items(record).items():
+            if isinstance(key, str) and is_genai_content_key(key):
+                del record.__dict__[key]
+                continue
             if key in _EXCEPTION_KEYS:
                 # Exception text supplied via ``extra=`` is not trusted; only the
                 # package's own formatting (below, from exc_info) is. A record already
