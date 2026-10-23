@@ -4,6 +4,63 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.2] - unreleased
+
+Privacy fixes, and scrubbing of log records emitted through the OpenTelemetry Logs API.
+No API changes. **Behaviour notes:** some lines are now redacted further than before
+(see "Changed"), and dropped-attribute warnings for browser events show unregistered
+keys as a hash.
+
+### Security
+- **Log records emitted through the OpenTelemetry Logs API are scrubbed.** They skipped
+  the logging filters, so a GenAI instrumentation event (openai-v2 events, litellm's
+  "otel" callback, with content capture on) such as `gen_ai.user.message` with
+  `body={"content": ...}` was exported verbatim. `setup_telemetry` now installs a
+  scrubbing log record processor ahead of the exporter: bodies and attribute values are
+  redacted (nested maps and lists too; bytes become a placeholder), GenAI content
+  attributes are dropped, and exception text the package did not format is reduced to
+  `Type: [REDACTED]`. A record that cannot be scrubbed is exported without content and
+  counted on `hmcts.telemetry.errors` (`internal.log_record_scrub`).
+- **GenAI events keep no content.** Span events and log records named `gen_ai.*` keep only
+  `gen_ai.system`, `gen_ai.provider.name`, `gen_ai.operation.name`, the request and
+  response models, `index`, `finish_reason`, `gen_ai.response.finish_reasons` and token
+  usage counts. The body and every other attribute (`content`, `message.content`,
+  `tool_calls`, ...) are dropped. Before, only `gen_ai.`-prefixed content keys were.
+- **Spaces after a secret's separator no longer shorten the redaction.**
+  `Password= two words;` was exported as `Password= [REDACTED] words;`, and
+  `password: two words` as `password: [REDACTED] words`. The spaces are kept and the
+  value is redacted whole.
+- **Over-long secret values fail closed.** A quoted value over 4,096 characters, or a
+  braced or connection-string value over 256, was cut at the bound and the rest
+  exported. It is now redacted to its closing quote or brace on the same line, otherwise
+  to the end of the line (a connection-string value to the next `;`).
+- **Browser-supplied keys are hashed in dropped-attribute warnings.** An unregistered key
+  sent through the relay (e.g. `fictional_jane_smith`) appeared verbatim in the exported
+  warning. For browser events, only registered schema and metadata keys are shown;
+  others appear as `sha256:<12 hex>`. Server-side warnings are unchanged.
+
+### Changed
+- **Unquoted secret values run to the next delimiter.** `password: <value>` and
+  `password = <value>` are redacted up to `;`, `&`, `,`, `}`, a quote, the end of the
+  line, or the next `key=value` / `key: value` pair, not just the first word. So
+  `password=x user=u1` still keeps `user=u1`, but `password: hunter2 at 10:30` becomes
+  `password: [REDACTED] 10:30`, and a long value after `=` is redacted to the next `;`
+  or the end of the line. Over-long quoted or braced values without a closing delimiter
+  take the rest of the line with them. This over-redaction is deliberate.
+- Standard-library log records carry the `hmcts.exception.formatted` marker between the
+  logging filter and the exporter (it is removed before export and never printed by
+  the JSON stdout formatter). A custom handler that prints every record attribute may
+  show it.
+
+### Testing
+- `assert_no_prohibited_content` checks every exported string separately and in full
+  (long strings in overlapping windows). Before, the rules saw only the first 41,472
+  characters of all exported text joined together, so a leak in a later record of a
+  large capture passed. Failures name the rule and where it matched
+  (e.g. `rule 'email' in log record #60 body`), never the content. New
+  `TelemetryCapture.exported_strings()` yields each string with its location.
+  Needles are still searched for in all exported text.
+
 ## [0.2.1] - unreleased
 
 Security and privacy fixes, and stricter relay defaults. **Upgrading:** a service that
