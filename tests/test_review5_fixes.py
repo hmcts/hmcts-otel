@@ -447,3 +447,69 @@ def test_azure_path_scrubs_log_records_before_the_distro_exports_them(monkeypatc
         setup_mod.shutdown_telemetry()
     genai, other = [getattr(item, "log_record", item) for item in exported.get_finished_logs()]
     assert genai.body is None and other.body == "contact [REDACTED]"
+
+
+# --- N2: browser keys are hashed in drop warnings -------------------------------------
+
+PERSON_KEY = "fictional_jane_smith"
+
+
+def _relay_client() -> Any:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from hmcts_otel import TelemetrySchema
+    from hmcts_otel.fastapi import create_telemetry_relay_router
+
+    schema = TelemetrySchema()
+    schema.attribute("ui.mode", allowed_values={"dictation", "upload"})
+    schema.attribute("ui.unused")
+    schema.event("ui.clicked", attributes=["ui.mode"], browser=True)
+    app = FastAPI()
+    app.include_router(create_telemetry_relay_router(schema=schema))
+    return TestClient(app)
+
+
+def _lenient() -> TelemetrySettings:
+    return TelemetrySettings(service_name="t", connection_string=None, sentry_dsn=None, log_format="json", strict=False)
+
+
+def _drop_warnings(tel: TelemetryCapture) -> list[str]:
+    return [str(r.body) for r in tel.log_records() if "dropped attribute" in str(r.body)]
+
+
+def test_relay_drop_warnings_hash_unregistered_keys() -> None:
+    from hmcts_otel import events as events_mod
+
+    events_mod._warned.clear()
+    with capture_telemetry(_lenient()) as tel:
+        response = _relay_client().post(
+            "/telemetry",
+            json={
+                "events": [
+                    {
+                        "name": "ui.clicked",
+                        "attributes": {PERSON_KEY: True, "Jane Smith 07700900123": 1, "ui.unused": "x"},
+                    }
+                ]
+            },
+        )
+        assert response.status_code < 300
+        warnings = _drop_warnings(tel)
+        tel.assert_no_prohibited_content(PERSON_KEY, "Jane Smith")
+    assert len(warnings) == 3
+    text = " ".join(warnings)
+    assert text.count("sha256:") == 2 and PERSON_KEY not in text
+    assert "'ui.unused'" in text  # registered for another event: shown as written
+
+
+def test_server_side_drop_warnings_are_unchanged() -> None:
+    from hmcts_otel import events as events_mod
+    from hmcts_otel import record_event
+
+    events_mod._warned.clear()
+    with capture_telemetry(_lenient()) as tel:
+        record_event("ui.server_side", {PERSON_KEY: 1, "Smith v Jones notes": 2})
+        text = " ".join(_drop_warnings(tel))
+    assert f"'{PERSON_KEY}'" in text  # attribute-like keys from code are shown
+    assert "Smith" not in text and text.count("sha256:") == 1

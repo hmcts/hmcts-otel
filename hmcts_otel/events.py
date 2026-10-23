@@ -12,7 +12,7 @@ import hashlib
 import logging
 import re
 import threading
-from collections.abc import Iterable, Mapping
+from collections.abc import Container, Iterable, Mapping
 
 from hmcts_otel import _guard, _state
 from hmcts_otel import conventions as c
@@ -30,28 +30,40 @@ _warned: set[tuple[str, str]] = set()
 _warned_lock = threading.Lock()
 
 
-def _describe_key(key: object) -> str:
-    """How to name a dropped key in a log line.
-
-    Keys from application code are attribute-like names and are shown. Keys that
-    are not (free text, possibly from a browser via the relay) are shown only as a
-    short hash, so their content is never logged.
-    """
-    text = key if isinstance(key, str) else repr(type(key))
-    if _ATTRIBUTE_LIKE.fullmatch(text):
-        return text
+def _hash_key(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:12]
 
 
-def report_dropped(dropped: Iterable[tuple[str, str]], *, where: str) -> None:
-    """Count dropped attributes and warn once per (key, reason). Values are never logged. Never raises."""
+def _describe_key(key: object, *, known: Container[str] | None = None) -> str:
+    """How to name a dropped key in a log line.
+
+    Keys from application code are attribute-like names and are shown. Keys that
+    are not (free text) are shown only as a short hash, so their content is never
+    logged. With ``known`` (keys from a browser via the relay), only a key in
+    ``known`` (a registered schema key) is shown; every other key is hashed, because
+    an attribute-like key such as ``jane_smith`` can still be personal data.
+    """
+    text = key if isinstance(key, str) else repr(type(key))
+    if known is not None:
+        return text if isinstance(key, str) and text in known else _hash_key(text)
+    if _ATTRIBUTE_LIKE.fullmatch(text):
+        return text
+    return _hash_key(text)
+
+
+def report_dropped(dropped: Iterable[tuple[str, str]], *, where: str, known_keys: Container[str] | None = None) -> None:
+    """Count dropped attributes and warn once per (key, reason). Values are never logged. Never raises.
+
+    Pass ``known_keys`` (the registered schema keys) for untrusted input, such as
+    browser events from the relay: any other key is logged only as a hash.
+    """
     try:
         counter = _state.instrument(
             "counter", c.METRIC_DROPPED_ATTRIBUTES, unit="{attribute}", description="Attributes rejected by the schema"
         )
         for key, reason in dropped:
             counter.add(1, {"reason": reason, "where": where})
-            safe_key = _describe_key(key)
+            safe_key = _describe_key(key, known=known_keys)
             with _warned_lock:
                 if (safe_key, reason) in _warned or len(_warned) >= _MAX_WARNED:
                     continue
@@ -119,7 +131,9 @@ def _record(
         core_exempt=not browser,
     )
     if dropped:
-        report_dropped(dropped, where=f"event:{name}")
+        # Browser keys are untrusted: only registered and metadata keys are logged as written.
+        known = frozenset(schema.attributes) | frozenset(METADATA_KEYS) if browser else None
+        report_dropped(dropped, where=f"event:{name}", known_keys=known)
 
     # Metadata is applied last, so it is authoritative.
     extra: dict[str, object] = dict(clean)
