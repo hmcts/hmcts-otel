@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - unreleased
+
+### Added (OBS-5: AI usage metering)
+- `hmcts_otel.ai_usage`: `record_llm_usage`, `record_speech_usage`, `ai_feature`,
+  `ai_fallback`, `current_ai_feature` and `instrument_litellm`, exported from `hmcts_otel`.
+- Metrics `gen_ai.client.token.usage` (histogram, `{token}`, one point per token type per
+  call, OpenTelemetry GenAI semantic conventions v1.37.0), `hmcts.ai.requests` (counter,
+  with `error.type` on failures) and `hmcts.speech.audio.duration` (counter, seconds).
+  Usage only: no prices or cost; billing is allocated by usage share at query time.
+- Core attributes `hmcts.ai.feature`, `hmcts.ai.fallback` and `hmcts.speech.mode`;
+  `conventions.SpeechMode`, `conventions.TokenType`, `conventions.GEN_AI_SEMCONV_VERSION`.
+- `current_stage()`: the innermost `stage()` name, used as the default AI feature.
+- `instrument_litellm()`: a litellm `CustomLogger` (sync and async success and failure
+  hooks), registered once, appended to existing callbacks. Reads usage, model, provider,
+  call type and fallback flags only. litellm stays optional and is imported lazily.
+- `TelemetryCapture.metric_points` also returns `min`, `max`, `bucket_counts` and
+  `explicit_bounds` for histograms.
+
+### Privacy
+- `setup_telemetry` defaults `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` and
+  `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED` to `false`, and warns if either is on.
+- GenAI prompt and response attributes (`gen_ai.prompt.*`, `gen_ai.completion.*`,
+  `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.system_instructions`, tool
+  call arguments and results, `llm.prompts`, `input.value`, ...) are dropped from exported
+  spans and span events, whichever instrumentation set them.
+
 ## [0.1.0] - unreleased
 
 ### Relay
