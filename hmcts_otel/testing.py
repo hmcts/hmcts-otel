@@ -25,7 +25,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from hmcts_otel import conventions as c
 from hmcts_otel._setup import is_configured, setup_telemetry, shutdown_telemetry
-from hmcts_otel.redaction import _REDACTION_MARGIN, MAX_TEXT_LENGTH, RedactionRule, Redactor, default_redactor
+from hmcts_otel.redaction import RedactionRule, Redactor, default_redactor
 from hmcts_otel.settings import TelemetrySettings
 
 
@@ -44,27 +44,14 @@ def _attribute_strings(where: str, attributes: Any) -> Iterator[tuple[str, str]]
         yield f"{where} #{k}", _as_text(value)
 
 
-# Rules are checked in windows of what Redactor.matches() looks at, overlapping by more
-# than the longest bounded default match (a JWT, 3 x 8,192 characters), so a match that
-# straddles one window boundary lies whole in the next window. Searching with pos and
-# endpos (not slices) keeps word boundaries and lookbehinds correct at window edges.
-_SCAN_WINDOW = MAX_TEXT_LENGTH + _REDACTION_MARGIN
-_SCAN_OVERLAP = 3 * 8_192 + 2_048
-
-
 def _matching_rules(rules: Iterable[RedactionRule], text: str) -> list[str]:
-    """Names of the rules matching anywhere in ``text``, however long it is."""
-    found: list[str] = []
-    for rule in rules:
-        start = 0
-        while True:
-            if rule.pattern.search(text, start, min(len(text), start + _SCAN_WINDOW)):
-                found.append(rule.name)
-                break
-            if start + _SCAN_WINDOW >= len(text):
-                break
-            start += _SCAN_WINDOW - _SCAN_OVERLAP
-    return found
+    """Names of the rules matching anywhere in ``text``, however long it is.
+
+    Each string is searched whole: the default rules are linear-time and unbounded, so a
+    match of any length (e.g. a 70,000-character URL with a query) is found. Windows of a
+    fixed size would miss a match longer than their overlap.
+    """
+    return [rule.name for rule in rules if rule.pattern.search(text)]
 
 
 @dataclass

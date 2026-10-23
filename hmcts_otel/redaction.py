@@ -35,6 +35,50 @@ def _keep_key(match: re.Match[str]) -> str:
     return f"{match.group(1)}{match.group(2)}{opening}{REDACTED}{closing}"
 
 
+# Names of keys whose values are secrets: the secret_key_value rule's keys, also used by
+# is_secret_key() for structured data (Sentry dicts, log extras, span attributes), where
+# a key and its value are checked separately and so never form a "key=value" pair.
+_SECRET_KEY_ALIASES = (
+    r"AccountKey|SharedAccessKey|SharedAccessSignature|sig|password|pwd|secret|client_secret"
+    r"|api[_-]?key|access_token|refresh_token"
+)
+# A structured key names a secret if its last one to three words, joined, are one of these
+# (words split at ".", "-", "_", spaces and camelCase): "db.password", "x-api-key",
+# "AzureStorageAccountKey", "client_secret", "Authorization". "design" or "token_count"
+# do not ("sig" and "token" must be whole words, and the last ones).
+_SECRET_KEY_WORDS = frozenset(
+    {
+        "accountkey",
+        "sharedaccesskey",
+        "sharedaccesssignature",
+        "sig",
+        "password",
+        "passwd",
+        "pwd",
+        "secret",
+        "clientsecret",
+        "apikey",
+        "accesstoken",
+        "refreshtoken",
+        "token",
+        "authorization",
+        "credential",
+        "credentials",
+        "privatekey",
+        "connectionstring",
+    }
+)
+_KEY_WORD = re.compile(r"[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])")
+
+
+def is_secret_key(name: object) -> bool:
+    """Whether a structured key (dict key, attribute name) names a secret value."""
+    if not isinstance(name, str) or len(name) > 256:
+        return False
+    words = [w.lower() for w in _KEY_WORD.findall(name)]
+    return any("".join(words[-n:]) in _SECRET_KEY_WORDS for n in (1, 2, 3) if len(words) >= n)
+
+
 def _keep_url(match: re.Match[str]) -> str:
     return f"{match.group(1)}?{REDACTED}"
 
@@ -70,8 +114,7 @@ DEFAULT_RULES: tuple[RedactionRule, ...] = (
     RedactionRule(
         "secret_key_value",
         re.compile(
-            r"(?i)\b(AccountKey|SharedAccessKey|SharedAccessSignature|sig|password|pwd|secret|client_secret"
-            r"|api[_-]?key|access_token|refresh_token)"
+            rf"(?i)\b({_SECRET_KEY_ALIASES})"
             # key=value, key="value", key='value', "key": "value", key: value. Up to
             # three spaces may follow the separator; they are kept, and never given
             # back to the value (possessive), so redaction stays idempotent.

@@ -31,7 +31,7 @@ from opentelemetry.trace.status import Status, StatusCode
 
 from hmcts_otel._exceptions import MAX_CHAIN
 from hmcts_otel.conventions import EXCEPTION_FORMATTED, REDACTED
-from hmcts_otel.redaction import Redactor
+from hmcts_otel.redaction import Redactor, is_secret_key
 
 _log = logging.getLogger(__name__)
 
@@ -256,7 +256,7 @@ def scrub_attributes(
     for key, value in attributes.items():
         if key == EXCEPTION_FORMATTED or is_genai_content_key(key):
             continue
-        if key in _QUERY_KEYS:
+        if key in _QUERY_KEYS or is_secret_key(key):
             out[key] = REDACTED if value else value
             continue
         if key in _URL_KEYS and isinstance(value, str):

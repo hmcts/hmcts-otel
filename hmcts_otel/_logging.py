@@ -19,7 +19,8 @@ from opentelemetry import trace
 from hmcts_otel._exceptions import exception_attributes
 from hmcts_otel.context import context_attributes
 from hmcts_otel.conventions import EXCEPTION_FORMATTED, REDACTED
-from hmcts_otel.redaction import Redactor
+from hmcts_otel.redaction import REDACTED as _REDACTED_VALUE
+from hmcts_otel.redaction import Redactor, is_secret_key
 from hmcts_otel.settings import TelemetrySettings
 
 EVENTS_LOGGER = "hmcts_otel.events"
@@ -120,6 +121,9 @@ class RedactingFilter(logging.Filter):
             if isinstance(key, str) and self._redactor.matches(key):
                 del record.__dict__[key]
                 continue
+            if is_secret_key(key):  # extra={"api_key": ...}: never a key=value pair
+                record.__dict__[key] = _REDACTED_VALUE
+                continue
             record.__dict__[key] = self._safe_extra(value)
         if record.exc_info:
             exc = record.exc_info[1] if isinstance(record.exc_info, tuple) else None
@@ -146,11 +150,16 @@ class ContextFilter(logging.Filter):
 
 
 class JsonFormatter(logging.Formatter):
-    def __init__(self, settings: TelemetrySettings) -> None:
+    def __init__(self, settings: TelemetrySettings, redactor: Redactor | None = None) -> None:
         super().__init__()
-        self._static = {"service.name": settings.service_name, "deployment.environment": settings.environment}
+        # Added after the handler's redaction filter has run, so redacted here, once.
+        redact = redactor.redact if redactor is not None else (lambda text: text)
+        self._static = {
+            "service.name": redact(settings.service_name),
+            "deployment.environment": redact(settings.environment),
+        }
         if settings.service_version:
-            self._static["service.version"] = settings.service_version
+            self._static["service.version"] = redact(settings.service_version)
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
@@ -252,7 +261,7 @@ def configure_logging(settings: TelemetrySettings, redactor: Redactor) -> list[l
         if isinstance(existing, StdoutHandler):
             root.removeHandler(existing)
     handler = StdoutHandler()
-    handler.setFormatter(JsonFormatter(settings) if settings.log_format == "json" else TextFormatter())
+    handler.setFormatter(JsonFormatter(settings, redactor) if settings.log_format == "json" else TextFormatter())
     add_filters(handler, filters)
     root.addHandler(handler)
     if not valid:
