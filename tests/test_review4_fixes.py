@@ -156,3 +156,42 @@ def test_relay_with_journey_types_accepts_a_listed_type(tel: TelemetryCapture) -
     assert result == {"accepted": 1, "rejected": 0}
     (ev,) = tel.events("ui.clicked")
     assert ev[c.JOURNEY_TYPE] == SESSION and ev[c.JOURNEY_ID] == sid
+
+
+# --- #8: browser journey IDs must be UUID or 32-hex ---------------------------------
+
+
+@pytest.mark.parametrize("bad", ["Jane_Smith", "07700900123", "PA-50123-2024", "a" * 32 + "-x"])
+def test_relay_refuses_journey_ids_that_are_not_uuids(tel: TelemetryCapture, bad: str) -> None:
+    result = _post(_client(_relay_schema()), [{"name": "ui.clicked", "journey": {"type": SESSION, "id": bad}}])
+    assert result == {"accepted": 0, "rejected": 1}
+    assert tel.events("ui.clicked") == []
+    tel.assert_no_prohibited_content(bad)
+
+
+@pytest.mark.parametrize("sid", [str(uuid.uuid4()), uuid.uuid4().hex, str(uuid.uuid4()).upper()])
+def test_relay_accepts_uuid_and_hex_journey_ids(tel: TelemetryCapture, sid: str) -> None:
+    result = _post(_client(_relay_schema()), [{"name": "ui.clicked", "journey": {"type": SESSION, "id": sid}}])
+    assert result == {"accepted": 1, "rejected": 0}
+    assert tel.events("ui.clicked")[0][c.JOURNEY_ID] == sid
+
+
+def test_relay_drops_browser_parent_ids_by_default(tel: TelemetryCapture) -> None:
+    sid, parent = str(uuid.uuid4()), str(uuid.uuid4())
+    events = [{"name": "ui.clicked", "journey": {"type": SESSION, "id": sid, "parent_id": parent}}]
+    assert _post(_client(_relay_schema()), events) == {"accepted": 1, "rejected": 0}
+    (ev,) = tel.events("ui.clicked")
+    assert ev[c.JOURNEY_ID] == sid and c.JOURNEY_PARENT_ID not in ev
+    tel.assert_no_prohibited_content(parent)
+
+
+def test_relay_keeps_a_uuid_parent_id_when_allowed(tel: TelemetryCapture) -> None:
+    sid, parent = str(uuid.uuid4()), str(uuid.uuid4())
+    events = [
+        {"name": "ui.clicked", "journey": {"type": SESSION, "id": sid, "parent_id": parent}},
+        {"name": "ui.clicked", "journey": {"type": SESSION, "id": sid, "parent_id": "07700900123"}},
+    ]
+    assert _post(_client(_relay_schema(), allow_parent_id=True), events) == {"accepted": 1, "rejected": 1}
+    (ev,) = tel.events("ui.clicked")
+    assert ev[c.JOURNEY_PARENT_ID] == parent
+    tel.assert_no_prohibited_content("07700900123")

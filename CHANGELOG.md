@@ -23,6 +23,12 @@ All notable changes to this project are documented here. The format follows
   journey is now rejected (counted in the response's `rejected`), as an event whose
   journey type is not listed already was. Before, any journey type was accepted. Pass
   `journey_types={...}` with the journeys the browser owns.
+- **Browser journey IDs must be a UUID or 32 hex characters.** Before, any
+  `[A-Za-z0-9_-]{1,64}` value was accepted, including names and phone numbers. An event
+  with any other `id` (or kept `parent_id`) is rejected. Server-side `Journey` validation
+  is unchanged.
+- **The relay drops a browser-sent `journey.parent_id` by default.** New option
+  `create_telemetry_relay_router(allow_parent_id=True)` keeps it (validated as above).
 
 ## [0.2.0] - unreleased
 
