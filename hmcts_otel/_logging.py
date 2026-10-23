@@ -68,10 +68,12 @@ class RedactingFilter(logging.Filter):
         # here would reach the logging call site (and could replace an exception
         # being handled there). Fail closed: keep the record, drop its content.
         try:
+            record.name = self._redactor.redact(record.name)
             if record.stack_info:
                 record.stack_info = self._redactor.redact(record.stack_info)
             self._redact(record)
         except Exception as exc:
+            record.name = "[unformattable logger name]"
             record.msg = "[unformattable log record]"
             record.args = None
             record.exc_info = None
