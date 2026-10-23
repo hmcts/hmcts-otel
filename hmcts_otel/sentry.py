@@ -41,7 +41,7 @@ def _redact_deep(value: Any, redactor: Redactor, depth: int = 0) -> Any:
         return redactor.redact(value)
     if isinstance(value, dict):
         return {
-            k: _redact_deep(v, redactor, depth + 1)
+            (redactor.redact(k) if isinstance(k, str) else k): _redact_deep(v, redactor, depth + 1)
             for k, v in value.items()
             if not (isinstance(k, str) and k in _QUERY_KEYS)
         }
