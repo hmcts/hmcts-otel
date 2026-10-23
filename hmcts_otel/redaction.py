@@ -53,9 +53,17 @@ DEFAULT_RULES: tuple[RedactionRule, ...] = (
             r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}"
         ),
     ),
-    RedactionRule("jwt", re.compile(r"\beyJ[A-Za-z0-9_-]{1,8192}\.[A-Za-z0-9_-]{1,8192}\.[A-Za-z0-9_-]{1,8192}")),
+    # Tokens fail closed: a token of any length is consumed whole, never cut at a bound
+    # with its remainder exported. Possessive quantifiers (Python 3.11+) never backtrack,
+    # so each rule stays linear-time however long the token is.
+    # JWT: "eyJ" (base64 of '{"') and its segments. With at least one dot, any length;
+    # without a dot (a truncated or oversized token), 16+ characters.
+    RedactionRule(
+        "jwt",
+        re.compile(r"\beyJ[A-Za-z0-9_-]++(?:\.[A-Za-z0-9_-]*+){1,2}|\beyJ[A-Za-z0-9_-]{13,}+"),
+    ),
     # Tokens are long; requiring 16+ characters avoids "the bearer of the warrant".
-    RedactionRule("bearer", re.compile(r"(?i)\bbearer\s{1,8}[A-Za-z0-9._~+/-]{16,4096}=*")),
+    RedactionRule("bearer", re.compile(r"(?i)\bbearer\s{1,8}[A-Za-z0-9._~+/-]{16,}+=*")),
     RedactionRule(
         "secret_key_value",
         re.compile(
@@ -111,9 +119,11 @@ DEFAULT_RULES: tuple[RedactionRule, ...] = (
 # rules applications add). Redaction runs on a slightly longer prefix so a secret
 # straddling the cut is still matched in full.
 MAX_TEXT_LENGTH = 32_768
-# The margin must cover the longest match of any default rule that can start before the
-# cut, so a secret straddling it is still matched in full. The longest is the JWT rule:
-# "eyJ" + three segments of up to 8,192 characters and two dots (24,579 characters).
+# The margin covers the longest bounded match of a default rule that can start before
+# the cut, so a secret straddling it is still matched in full. JWT and bearer tokens are
+# unbounded and fail closed (a token running past the cut is redacted up to it); the
+# margin is kept at its former JWT-derived size (24,579 + 2,048) as a safe upper bound
+# for the remaining bounded rules.
 _JWT_SEGMENT_MAX = 8_192
 _LONGEST_DEFAULT_MATCH = len("eyJ") + 3 * _JWT_SEGMENT_MAX + 2
 _REDACTION_MARGIN = _LONGEST_DEFAULT_MATCH + 2_048

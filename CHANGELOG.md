@@ -22,6 +22,11 @@ keys as a hash.
   as `invalid.metric_dimension`. Schemas created without an explicit redactor now follow
   the configured one too, so custom rules also reject matching attribute values and
   identifiers (strict mode raises).
+- **Oversized tokens fail closed.** Bearer tokens of any length, and JWTs of any
+  length (including a segment longer than 8,192 characters, a token with its signature
+  cut off, or a token truncated before its first dot, from 16 characters) are redacted
+  whole. Previously a bearer token over 4,096 characters kept its tail and an oversized
+  JWT was not redacted at all. Possessive quantifiers keep both rules linear-time.
 - **URL credentials are removed before the email rule runs**, so
   `https://user:password@host.domain/path` no longer keeps the username.
 

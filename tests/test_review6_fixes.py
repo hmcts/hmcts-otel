@@ -117,3 +117,43 @@ def test_url_credentials_are_removed_before_the_email_rule(url: str) -> None:
 
 def test_plain_emails_are_still_redacted() -> None:
     assert default_redactor.redact("contact judge.smith@example.test now") == "contact [REDACTED] now"
+
+
+# Oversized tokens fail closed (#9) ---------------------------------------------------
+
+
+def test_an_oversized_bearer_token_is_redacted_whole() -> None:
+    out = default_redactor.redact("Authorization: Bearer " + "A" * 5_000 + "ZSUFFIX")
+    assert "ZSUFFIX" not in out and "AAAA" not in out
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "eyJ" + "a" * 9_000 + "." + "b" * 20 + "." + "c" * 20,  # header past the old bound
+        "eyJ" + "a" * 30 + "." + "b" * 9_000 + "." + "c" * 20,  # payload past the old bound
+        "eyJ" + "a" * 30 + "." + "b" * 30,  # two segments only (signature cut off)
+        "eyJ" + "a" * 40,  # no dot: a truncated token
+    ],
+)
+def test_an_oversized_or_partial_jwt_is_redacted_whole(token: str) -> None:
+    out = default_redactor.redact(f"token {token} end")
+    assert out == "token [REDACTED] end"
+
+
+def test_short_tokens_and_prose_are_unchanged() -> None:
+    assert default_redactor.redact("eyJa.b.c") == "[REDACTED]"  # still a JWT shape
+    assert default_redactor.redact("the bearer of the warrant") == "the bearer of the warrant"
+    assert default_redactor.redact("eyJohn") == "eyJohn"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["-eyJ" * 15_000, "eyJa." * 12_000, "bearer " * 9_000, "bearer " + ("A" * 15 + " bearer ") * 3_000],
+)
+def test_token_rules_stay_linear_time(text: str) -> None:
+    import time
+
+    start = time.perf_counter()
+    default_redactor.redact(text)
+    assert time.perf_counter() - start < 0.5
