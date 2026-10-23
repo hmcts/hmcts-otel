@@ -231,8 +231,9 @@ def test_failed_redaction_drops_extras(
     assert "person" not in dict(record.attributes or {})
     lenient.assert_no_prohibited_content(SENTINEL)
     lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
-    (line,) = [entry for entry in lines if entry.get("logger") == "app"]
-    assert line["message"] == "[unformattable log record]" and line["level"] == "WARNING"
+    # Fail closed: the logger name is replaced too (it may have been built from data).
+    (line,) = [entry for entry in lines if entry.get("message") == "[unformattable log record]"]
+    assert line["logger"] == "[unformattable logger name]" and line["level"] == "WARNING"
     assert SENTINEL not in json.dumps(line)
     assert not default_redactor.matches(json.dumps(line))
 
