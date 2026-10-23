@@ -62,20 +62,27 @@ DEFAULT_RULES: tuple[RedactionRule, ...] = (
             # three spaces may follow the separator; they are kept, and never given
             # back to the value (possessive), so redaction stays idempotent.
             r"(\"?\s{0,3}[=:]\s{0,3}+)(?![\"'{]?\[REDACTED\])("
+            # Each value has a bounded fast path and fails closed past it: a longer value
+            # is redacted to its closing quote or brace if one follows on the same line,
+            # otherwise to the end of the line (a connection-string value to ';'). The
+            # overflow paths are reached only after a key and never fail, so each match
+            # scans at most to the end of its line and redaction stays linear. The cost
+            # is occasional over-redaction of the rest of a line.
             # Quoted: to the closing quote (backslash escapes allowed), or the end of
             # the line if unclosed.
-            r"\"(?:[^\"\\\r\n]|\\.){1,4096}\"?"
-            r"|'(?:[^'\\\r\n]|\\.){1,4096}'?"
+            r"\"(?:[^\"\\\r\n]|\\.){1,4096}(?:\"|[^\"\\\r\n]*(?:\\.[^\"\\\r\n]*)*\"?)"
+            r"|'(?:[^'\\\r\n]|\\.){1,4096}(?:'|[^'\\\r\n]*(?:\\.[^'\\\r\n]*)*'?)"
             # ODBC braced: Pwd={two words}
-            r"|\{[^}\r\n]{1,256}\}"
+            r"|\{(?:[^}\r\n]{1,256}\}|[^}\r\n]{257,}\}?)"
             # Connection string, Password=two words;: after '=' (and any spaces), up to
             # ';' or the end of the line, if no other key=value intervenes.
-            r"|(?:(?<==)|(?<==\s)|(?<==\s\s)|(?<==\s\s\s))[^;=\r\n\"'{}]{1,256}(?=;|\r|\n|\Z)"
+            r"|(?:(?<==)|(?<==\s)|(?<==\s\s)|(?<==\s\s\s))"
+            r"(?:[^;=\r\n\"'{}]{1,256}(?=;|\r|\n|\Z)|[^;=\r\n\"'{}]{257}[^;\r\n]*)"
             # Otherwise words up to the next delimiter (; & , } or a quote), the end of
             # the line, or the next key=value / key: value pair, so a value with spaces
             # (password: two words) is redacted whole and a key=value log line keeps its
-            # other fields (password=x user=u1 keeps user=u1).
-            r"|[^;&\s\"',}]{1,4096}(?:[ \t]{1,3}(?![\w.-]{1,64}\s{0,3}[=:])[^;&\s\"',}]{1,4096})*)"
+            # other fields (password=x user=u1 keeps user=u1). Each word is consumed whole.
+            r"|[^;&\s\"',}]+(?:[ \t]{1,3}(?![\w.-]{1,64}\s{0,3}[=:])[^;&\s\"',}]+)*)"
         ),
         _keep_key,
     ),
