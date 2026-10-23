@@ -101,7 +101,10 @@ DEFAULT_RULES: tuple[RedactionRule, ...] = (
     # httpx's "HTTP Request: GET https://...?..." INFO logs.
     RedactionRule(
         "url_query",
-        re.compile(r"(?i)\b(https?://[^\s?#\"'<>]{1,2048})\?(?!\[REDACTED\])[^\s#\"'<>]+"),
+        # Any length, still linear: the URL part never crosses another "http(s)://", so in
+        # "https://https://..." each character is scanned by one attempt only, and the
+        # possessive quantifier never backtracks.
+        re.compile(r"(?i)\b(https?://(?:(?!https?://)[^\s?#\"'<>])*+)\?(?!\[REDACTED\])[^\s#\"'<>]+"),
         _keep_url,
     ),
     # Query strings of relative paths, e.g. access-log request lines "GET /search?q=... HTTP/1.1".

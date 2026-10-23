@@ -157,3 +157,37 @@ def test_token_rules_stay_linear_time(text: str) -> None:
     start = time.perf_counter()
     default_redactor.redact(text)
     assert time.perf_counter() - start < 0.5
+
+
+# Long URLs keep no query (PR #4 review) ----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "GET https://example.test/" + "a" * 2_100 + "?q=QUERY_SENTINEL 200",  # past the old bound
+        "redirect=https://example.test/" + "a" * 5_000 + "?code=QUERY_SENTINEL",
+        "https://a.test/p/https://b.test/q?x=QUERY_SENTINEL",  # a nested scheme
+        "GET /" + "b" * 3_000 + "?token=QUERY_SENTINEL HTTP/1.1",  # a long relative path
+    ],
+)
+def test_a_long_url_keeps_no_query(text: str) -> None:
+    out = default_redactor.redact(text)
+    assert "QUERY_SENTINEL" not in out and "?[REDACTED]" in out
+
+
+def test_a_url_without_a_query_is_unchanged() -> None:
+    url = "https://example.test/" + "a" * 3_000 + "#fragment"
+    assert default_redactor.redact(url) == url
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["https://" * 7_000, "http://a" * 7_000, "https://" * 7_000 + "?x=1", "https://" + "a" * 58_000, "/x" * 20_000],
+)
+def test_url_rules_stay_linear_time(text: str) -> None:
+    import time
+
+    start = time.perf_counter()
+    default_redactor.redact(text)
+    assert time.perf_counter() - start < 0.5
