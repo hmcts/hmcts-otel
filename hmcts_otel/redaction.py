@@ -115,7 +115,7 @@ DEFAULT_RULES: tuple[RedactionRule, ...] = (
     # characters has a single start position.
     RedactionRule(
         "path_query",
-        re.compile(r"(?<![\w:/.?=&%~-])(/[\w\-./%~]*+)\?(?!\[REDACTED\])[^\s#\"'<>]+"),
+        re.compile(r"(?<![\w:/.?=&%~!$'()*+,;@-])(/[\w./%~!$&'()*+,;=:@-]*+)\?(?!\[REDACTED\])[^\s#\"'<>]+"),
         _keep_url,
     ),
 )
