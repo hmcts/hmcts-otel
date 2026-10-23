@@ -45,7 +45,10 @@ def _keep_url(match: re.Match[str]) -> str:
 DEFAULT_RULES: tuple[RedactionRule, ...] = (
     # URL credentials first: the email rule would otherwise consume "password@host.domain"
     # and leave the username behind ("https://user:[REDACTED]/path").
-    RedactionRule("url_userinfo", re.compile(r"(?i)(?<=://)[^/\s:@]{1,256}:[^/\s@]{1,256}@")),
+    # The whole userinfo, any length, with or without a password (user@, user:@, user:pw@):
+    # everything after "://" up to "@" that cannot end an authority. One start per "://",
+    # and possessive, so linear-time. (An "@" past the inspected prefix: see Redactor.)
+    RedactionRule("url_userinfo", re.compile(r"(?<=://)[^/\s?#@\[\]\"'<>]++@")),
     RedactionRule(
         "email",
         # Local part: the RFC 5322 dot-atom set (o'brien@..., foo!bar@...), bounded.
@@ -133,6 +136,27 @@ _REDACTION_MARGIN = _LONGEST_DEFAULT_MATCH + 2_048
 TRUNCATED = "...[truncated]"
 
 
+_AUTHORITY_END = re.compile(r"[/\s?#\[\]\"'<>]")
+
+
+def _userinfo_across(text: str, cut: int) -> int | None:
+    """Where a URL's userinfo starts if it runs past ``cut`` (its "@" is not inspected).
+
+    The rules only see ``text[:cut]``, so ``https://user:pw...@host`` straddling the cut
+    would keep its credentials. Returns the index just after "://" when the authority
+    has neither ended nor reached its "@" before the cut, and an "@" follows after it.
+    """
+    start = text.rfind("://", 0, cut)
+    if start < 0:
+        return None
+    start += 3
+    if _AUTHORITY_END.search(text, start, cut) or text.find("@", start, cut) >= 0:
+        return None
+    end_match = _AUTHORITY_END.search(text, cut)
+    end = end_match.start() if end_match else len(text)
+    return start if text.find("@", cut, end) >= 0 else None
+
+
 class Redactor:
     """Applies redaction rules to text. Thread-safe for concurrent use and rule additions."""
 
@@ -152,7 +176,10 @@ class Redactor:
     def redact(self, text: str) -> str:
         truncated = len(text) > MAX_TEXT_LENGTH
         if truncated:
-            text = text[: MAX_TEXT_LENGTH + _REDACTION_MARGIN]
+            cut = MAX_TEXT_LENGTH + _REDACTION_MARGIN
+            across = _userinfo_across(text, cut)
+            # Fail closed: credentials whose "@" lies past the cut are redacted to the cut.
+            text = text[:across] + REDACTED if across is not None else text[:cut]
         for rule in self._rules:
             text = rule.pattern.sub(rule.replacement, text)
         if truncated:
@@ -161,8 +188,11 @@ class Redactor:
 
     def matches(self, text: str) -> list[str]:
         """Names of the rules that match ``text``. Never returns the matched values."""
-        text = text[: MAX_TEXT_LENGTH + _REDACTION_MARGIN]
-        return [rule.name for rule in self._rules if rule.pattern.search(text)]
+        cut = MAX_TEXT_LENGTH + _REDACTION_MARGIN
+        found = [rule.name for rule in self._rules if rule.pattern.search(text[:cut])]
+        if len(text) > cut and "url_userinfo" not in found and _userinfo_across(text, cut) is not None:
+            found.append("url_userinfo")
+        return found
 
 
 default_redactor = Redactor()
