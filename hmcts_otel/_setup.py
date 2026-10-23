@@ -31,7 +31,7 @@ from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 
 from hmcts_otel import _span_exceptions, _state
 from hmcts_otel._logging import StdoutHandler, add_filters, configure_logging, make_filters, remove_handlers
-from hmcts_otel._scrubbing import ScrubbingSpanExporter
+from hmcts_otel._scrubbing import ScrubbingLogRecordProcessor, ScrubbingSpanExporter
 from hmcts_otel._state import LOCK, STATE
 from hmcts_otel.context import JourneySpanProcessor
 from hmcts_otel.redaction import Redactor, default_redactor
@@ -75,6 +75,12 @@ def _credential(settings: TelemetrySettings) -> Any:
 
 def _scrubbing(exporter: SpanExporter, settings: TelemetrySettings, redactor: Redactor) -> ScrubbingSpanExporter:
     return ScrubbingSpanExporter(exporter, redactor, include_exception_messages=settings.capture_exception_messages)
+
+
+def _log_scrubbing(settings: TelemetrySettings, redactor: Redactor) -> ScrubbingLogRecordProcessor:
+    """Scrubs every log record, including those emitted through the OpenTelemetry Logs API
+    (which bypass the logging filters). Must come before any exporting processor."""
+    return ScrubbingLogRecordProcessor(redactor, include_exception_messages=settings.capture_exception_messages)
 
 
 def _check_tracer_provider(settings: TelemetrySettings) -> None:
@@ -208,6 +214,8 @@ def _setup_azure(
             enable_live_metrics=settings.enable_live_metrics,
             metric_readers=list(metric_readers),
             views=_metric_views(),
+            # Added before the distro's exporting processor.
+            log_record_processors=[_log_scrubbing(settings, redactor)],
         )
     # The distro attaches its OpenTelemetry log handler to the root logger.
     filters = make_filters(redactor, settings)
@@ -263,6 +271,7 @@ def _setup_custom(
 
     logger_provider = LoggerProvider(resource=resource, shutdown_on_exit=False)
     if log_exporter is not None:
+        logger_provider.add_log_record_processor(_log_scrubbing(settings, redactor))  # first: scrubs in place
         logger_provider.add_log_record_processor(SimpleLogRecordProcessor(log_exporter))
         handler = _otel_logging_handler(logger_provider)
         add_filters(handler, make_filters(redactor, settings))

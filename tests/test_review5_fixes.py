@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
+from typing import Any
 
 import pytest
 from opentelemetry._logs import LogRecord
 from opentelemetry.sdk._logs import ReadableLogRecord
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan
+from pydantic import SecretStr
 
+from hmcts_otel import _state
 from hmcts_otel.redaction import MAX_TEXT_LENGTH, default_redactor
+from hmcts_otel.settings import TelemetrySettings
 from hmcts_otel.testing import TelemetryCapture, capture_telemetry
 
 # --- N3: spaces after the separator do not shorten the redacted value ----------------
@@ -248,3 +253,197 @@ def test_needles_are_still_searched_in_all_exported_text() -> None:
         _export_raw_log(tel, "y" * 100_000 + " SENTINEL_FICTIONAL")
         with pytest.raises(AssertionError, match="needle #1"):
             tel.assert_no_prohibited_content("absent", "SENTINEL_FICTIONAL")
+
+
+# --- Logs API records are scrubbed; GenAI events keep no content (N1) ----------------
+
+PROMPT = "PROMPT_FICTIONAL_JANE_SMITH"
+ANSWER = "ANSWER_FICTIONAL_CASE_123"
+
+
+def _emit(**kwargs: Any) -> None:
+    """Emit through the OpenTelemetry Logs API on the package's LoggerProvider, as
+    GenAI instrumentation (openai-v2 events, litellm's "otel" callback) does."""
+    provider = _state.STATE.logger_provider
+    assert provider is not None
+    provider.get_logger("fictional.genai.instrumentation").emit(LogRecord(**kwargs))
+
+
+def _only_record(tel: TelemetryCapture) -> Any:
+    (record,) = [r for r in tel.log_records() if r.body != "filler"]
+    return record
+
+
+@pytest.mark.parametrize("named_by", ["attribute", "event_name"])
+def test_logs_api_genai_events_are_exported_without_content(named_by: str) -> None:
+    attributes: dict[str, Any] = {
+        "gen_ai.system": "openai",
+        "gen_ai.request.model": "fictional-model",
+        "content": PROMPT,
+        "message.content": PROMPT,
+        "gen_ai.prompt": PROMPT,
+        "tool_calls": json.dumps([{"arguments": PROMPT}]),
+        "index": 0,
+        "finish_reason": "stop",
+    }
+    name = {"event_name": "gen_ai.user.message"}
+    if named_by == "attribute":
+        attributes["event.name"] = "gen_ai.user.message"
+        name = {}
+    with capture_telemetry() as tel:
+        _emit(body={"content": PROMPT, "role": "user"}, attributes=attributes, **name)
+        record = _only_record(tel)
+        tel.assert_no_prohibited_content(PROMPT)
+    assert record.body is None
+    kept = dict(record.attributes or {})
+    kept.pop("event.name", None)
+    assert kept == {
+        "gen_ai.system": "openai",
+        "gen_ai.request.model": "fictional-model",
+        "index": 0,
+        "finish_reason": "stop",
+    }
+
+
+def test_logs_api_genai_choice_drops_the_message() -> None:
+    with capture_telemetry() as tel:
+        _emit(
+            event_name="gen_ai.choice",
+            body={"index": 0, "finish_reason": "stop", "message": {"content": ANSWER}},
+            attributes={"gen_ai.system": "openai", "gen_ai.response.finish_reasons": ("stop",)},
+        )
+        record = _only_record(tel)
+        tel.assert_no_prohibited_content(ANSWER)
+    assert record.body is None
+    assert dict(record.attributes or {}) == {"gen_ai.system": "openai", "gen_ai.response.finish_reasons": ("stop",)}
+
+
+def test_other_logs_api_records_are_redacted() -> None:
+    with capture_telemetry() as tel:
+        _emit(
+            body={"text": f"contact {FICTIONAL_EMAIL}", "nested": [{"to": FICTIONAL_EMAIL}], "n": 3},
+            attributes={
+                "note": f"mail {FICTIONAL_EMAIL}",
+                "list": (f"x {FICTIONAL_EMAIL}", "ok"),
+                "map": {"to": FICTIONAL_EMAIL},
+                "raw": b"bytes " + FICTIONAL_EMAIL.encode(),
+                "gen_ai.prompt": PROMPT,
+                "count": 2,
+            },
+        )
+        _emit(body=f"plain body {FICTIONAL_EMAIL}")
+        records = [r for r in tel.log_records()]
+        tel.assert_no_prohibited_content(FICTIONAL_EMAIL, PROMPT)
+    structured, plain = records
+    assert structured.body == {"text": "contact [REDACTED]", "nested": [{"to": "[REDACTED]"}], "n": 3}
+    attrs = dict(structured.attributes or {})
+    assert attrs["note"] == "mail [REDACTED]" and attrs["count"] == 2
+    assert attrs["list"] == ("x [REDACTED]", "ok") and attrs["map"] == {"to": "[REDACTED]"}
+    assert attrs["raw"] == "[bytes omitted]" and "gen_ai.prompt" not in attrs
+    assert plain.body == "plain body [REDACTED]"
+
+
+def test_logs_api_exception_text_is_reduced_to_the_type() -> None:
+    forged = f'Traceback (most recent call last):\n  File "x.py", line 1, in f\n    {PROMPT}\nValueError: {PROMPT}'
+    with capture_telemetry() as tel:
+        _emit(
+            body="failed",
+            attributes={"exception.type": "ValueError", "exception.message": PROMPT, "exception.stacktrace": forged},
+        )
+        attrs = dict(_only_record(tel).attributes or {})
+        tel.assert_no_prohibited_content(PROMPT)
+    assert attrs["exception.message"] == "[REDACTED]"
+    assert attrs["exception.stacktrace"] == "ValueError: [REDACTED]\n"
+
+
+def test_genai_span_events_keep_no_content() -> None:
+    with capture_telemetry() as tel:
+        with _state.get_tracer().start_as_current_span("chat") as span:
+            span.add_event("gen_ai.user.message", {"content": PROMPT, "gen_ai.system": "openai"})
+            span.add_event("gen_ai.choice", {"message.content": ANSWER, "index": 0, "finish_reason": "stop"})
+            span.add_event("ordinary", {"content": f"mail {FICTIONAL_EMAIL}"})
+        tel.assert_no_prohibited_content(PROMPT, ANSWER)
+        (exported,) = tel.finished_spans()
+    events = {e.name: dict(e.attributes or {}) for e in exported.events}
+    assert events["gen_ai.user.message"] == {"gen_ai.system": "openai"}
+    assert events["gen_ai.choice"] == {"index": 0, "finish_reason": "stop"}
+    assert events["ordinary"] == {"content": "mail [REDACTED]"}  # not a GenAI event: redacted only
+
+
+def test_a_record_that_cannot_be_scrubbed_keeps_no_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("scrubber broke")
+
+    monkeypatch.setattr("hmcts_otel._scrubbing.scrub_attributes", broken)
+    with capture_telemetry() as tel:
+        _emit(body=f"contact {FICTIONAL_EMAIL}", attributes={"note": PROMPT})
+        logging.getLogger("app").info("stdlib %s", PROMPT)  # does not raise into the caller
+        bodies = [r.body for r in tel.log_records()]
+        attrs = [dict(r.attributes or {}) for r in tel.log_records()]
+        tel.assert_no_prohibited_content(FICTIONAL_EMAIL, PROMPT)
+        errors = tel.metric_points("hmcts.telemetry.errors")
+    assert bodies[:2] == ["[unscrubbable log record]"] * 2 and attrs[:2] == [{}, {}]
+    assert any(p["attributes"].get("kind") == "internal.log_record_scrub" for p in errors)
+
+
+def test_stdlib_exception_logs_keep_their_frames_and_no_marker(capsys: pytest.CaptureFixture[str]) -> None:
+    with capture_telemetry() as tel:
+        try:
+            raise ValueError(PROMPT)
+        except ValueError:
+            logging.getLogger("app").exception("failed")
+        (record,) = [r for r in tel.log_records() if r.body == "failed"]
+        tel.assert_no_prohibited_content(PROMPT)
+    attrs = dict(record.attributes or {})
+    assert "hmcts.exception.formatted" not in attrs
+    assert 'File "' in attrs["exception.stacktrace"] and "ValueError: [REDACTED]" in attrs["exception.stacktrace"]
+    (line,) = [json.loads(x) for x in capsys.readouterr().out.splitlines() if '"failed"' in x]
+    assert "hmcts.exception.formatted" not in line and 'File "' in line["exception.stacktrace"]
+
+
+def test_azure_path_scrubs_log_records_before_the_distro_exports_them(monkeypatch: pytest.MonkeyPatch) -> None:
+    import azure.monitor.opentelemetry as distro
+    import azure.monitor.opentelemetry.exporter as exporter_mod
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor
+
+    from hmcts_otel import _setup as setup_mod
+
+    exported = InMemoryLogRecordExporter()
+    providers: list[LoggerProvider] = []
+
+    def fake_configure(**kwargs: Any) -> None:
+        # As the distro's _setup_logging: custom processors, then its exporting processor.
+        provider = LoggerProvider()
+        for processor in kwargs.get("log_record_processors", []):
+            provider.add_log_record_processor(processor)
+        provider.add_log_record_processor(SimpleLogRecordProcessor(exported))
+        providers.append(provider)
+
+    class FakeExporter:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def shutdown(self) -> None:
+            return None
+
+    monkeypatch.setattr(distro, "configure_azure_monitor", fake_configure)
+    monkeypatch.setattr(exporter_mod, "AzureMonitorTraceExporter", FakeExporter)
+    monkeypatch.setattr(setup_mod.trace, "set_tracer_provider", lambda tp: None)
+    setup_mod.setup_telemetry(
+        TelemetrySettings(
+            service_name="t",
+            connection_string=SecretStr("InstrumentationKey=00000000-0000-0000-0000-000000000000"),
+            sentry_dsn=None,
+        )
+    )
+    try:
+        (provider,) = providers
+        provider.get_logger("x").emit(
+            LogRecord(body={"content": PROMPT}, attributes={"event.name": "gen_ai.user.message"})
+        )
+        provider.get_logger("x").emit(LogRecord(body=f"contact {FICTIONAL_EMAIL}"))
+    finally:
+        setup_mod.shutdown_telemetry()
+    genai, other = [getattr(item, "log_record", item) for item in exported.get_finished_logs()]
+    assert genai.body is None and other.body == "contact [REDACTED]"

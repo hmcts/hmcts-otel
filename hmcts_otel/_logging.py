@@ -111,8 +111,9 @@ class RedactingFilter(logging.Filter):
         if record.exc_info:
             exc = record.exc_info[1] if isinstance(record.exc_info, tuple) else None
             if exc is not None:
+                # Keeps the EXCEPTION_FORMATTED marker, which tells the log record
+                # processor this stack trace is safe; the processor removes it.
                 attrs = exception_attributes(exc, include_messages=self._include_messages, redactor=self._redactor)
-                attrs.pop(EXCEPTION_FORMATTED, None)  # span-export marker; not needed on logs
                 record.__dict__.update(attrs)
                 _FORMATTED_RECORDS.add(record)
             # exc_info=True outside an except block gives (None, None, None): nothing to record.
@@ -149,7 +150,8 @@ class JsonFormatter(logging.Formatter):
             payload["trace_id"] = format(span_context.trace_id, "032x")
             payload["span_id"] = format(span_context.span_id, "016x")
         for key, value in _extra_items(record).items():
-            payload[key] = value
+            if key != EXCEPTION_FORMATTED:
+                payload[key] = value
         if record.exc_info and record.exc_info[0] is not None:  # only if no RedactingFilter ran
             payload["exception.type"] = record.exc_info[0].__name__
         return json.dumps(payload, default=str)
