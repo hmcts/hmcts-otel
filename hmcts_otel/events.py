@@ -19,7 +19,7 @@ from hmcts_otel import conventions as c
 from hmcts_otel._logging import EVENTS_LOGGER
 from hmcts_otel.context import Journey, current_journey, get_request_id
 from hmcts_otel.conventions import EventClass, EventSource
-from hmcts_otel.schema import TelemetrySchema, check_name, default_schema
+from hmcts_otel.schema import METADATA_KEYS, TelemetrySchema, check_name, default_schema
 
 _ATTRIBUTE_LIKE = re.compile(r"[a-z][a-z0-9_.]{0,63}")
 _events_log = logging.getLogger(EVENTS_LOGGER)
@@ -102,29 +102,42 @@ def _record(
     spec = schema.get_event(name)
     allowed = spec.attributes if spec is not None else None
     cls = spec.event_class if spec is not None else (event_class or EventClass.OPERATIONAL)
+    source = EventSource(source)
+    browser = source is EventSource.BROWSER
 
-    clean, dropped = schema.validate(attributes or {}, allowed=allowed)
+    # Metadata is never caller-settable. The request ID comes from the request
+    # context unless the event registers it explicitly. Browser input is held to the
+    # event's registered attributes only: core keys such as the outcome and error
+    # code are accepted from a browser only where the event lists them.
+    reserved = set(METADATA_KEYS)
+    if allowed is None or c.REQUEST_ID not in allowed:
+        reserved.add(c.REQUEST_ID)
+    clean, dropped = schema.validate(
+        attributes or {},
+        allowed=(allowed or ()) if browser else allowed,
+        reserved=reserved,
+        core_exempt=not browser,
+    )
     if dropped:
         report_dropped(dropped, where=f"event:{name}")
 
+    # Metadata is applied last, so it is authoritative.
+    extra: dict[str, object] = dict(clean)
+    extra[c.CUSTOM_EVENT_NAME] = name
+    extra[c.EVENT_CLASS] = cls.value
+    extra[c.EVENT_SOURCE] = source.value
     current = journey or current_journey()
-    extra: dict[str, object] = {
-        c.CUSTOM_EVENT_NAME: name,
-        c.EVENT_CLASS: cls.value,
-        c.EVENT_SOURCE: EventSource(source).value,
-    }
     if current is not None:
         extra.update(current.attributes())
     rid = get_request_id()
-    if rid is not None:
+    if rid is not None and c.REQUEST_ID not in clean:
         extra[c.REQUEST_ID] = rid
-    extra.update(clean)
     if duration_ms is not None:
         extra[c.DURATION_MS] = float(duration_ms)
 
     _events_log.info(name, extra=extra)
 
-    metric_attrs = {"event": name, "class": cls.value, "source": EventSource(source).value}
+    metric_attrs = {"event": name, "class": cls.value, "source": source.value}
     _state.instrument("counter", c.METRIC_EVENTS, unit="{event}", description="Events recorded").add(1, metric_attrs)
     if duration_ms is not None:
         _state.instrument(

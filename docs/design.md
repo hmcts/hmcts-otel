@@ -257,6 +257,19 @@ in the call's metadata). litellm's SDK-level `fallbacks=` gives callbacks no sig
 **No `genai` extra.** litellm is large and fast-moving; services choose its version.
 `instrument_litellm()` imports it lazily and returns False if it is missing.
 
+## 21. Event metadata is authoritative
+
+Every event's journey, source, class, duration and name are set by hmcts-otel, after
+the caller's attributes, and a caller attribute with one of those keys is dropped and
+counted (reason `reserved`). Otherwise a browser could post
+`{"hmcts.journey.id": <another user's job>, "hmcts.event.source": "server"}` and its
+event would be filed as a server event in that journey, whatever `journey_types` says.
+The request ID comes from the request unless the event registers `hmcts.request.id`
+itself (a browser "error report copied" event names the failed request).
+
+Server code may set `hmcts.outcome` and `hmcts.error.code` on any event. A browser may
+set only what the event's registration lists, core keys included.
+
 ## Known limitations
 
 - **uvicorn access logs** use uvicorn's own handler, which this package cannot filter.
