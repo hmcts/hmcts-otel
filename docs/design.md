@@ -173,7 +173,10 @@ removed at any depth.
 - **Status descriptions** keep only `Type: [REDACTED]` or a controlled code.
 - **Route templates** replace concrete paths, and link attributes are scrubbed.
 - **Request IDs** must be UUID or hex.
-- **Dropped keys** that are not attribute-like are logged as a hash.
+- **Dropped keys** that are not attribute-like are logged as a hash. Keys from a browser
+  (relay events) are logged as written only if they are registered schema or metadata
+  keys; any other key is hashed, because an attribute-like key such as
+  `fictional_jane_smith` can still be personal data.
 - **The OTel logging handler** comes from opentelemetry-instrumentation-logging (the
   SDK's is deprecated from 1.40).
 - **The shutdown budget** covers the Sentry flush.
