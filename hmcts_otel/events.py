@@ -62,7 +62,7 @@ def report_dropped(dropped: Iterable[tuple[str, str]], *, where: str, known_keys
             "counter", c.METRIC_DROPPED_ATTRIBUTES, unit="{attribute}", description="Attributes rejected by the schema"
         )
         for key, reason in dropped:
-            counter.add(1, {"reason": reason, "where": where})
+            counter.add(1, {"reason": reason, "where": _guard.safe_dimension(where)})
             safe_key = _describe_key(key, known=known_keys)
             with _warned_lock:
                 if (safe_key, reason) in _warned or len(_warned) >= _MAX_WARNED:
