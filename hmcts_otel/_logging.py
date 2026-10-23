@@ -107,6 +107,9 @@ class RedactingFilter(logging.Filter):
                     else:
                         record.__dict__[key] = REDACTED
                 continue
+            if isinstance(key, str) and self._redactor.matches(key):
+                del record.__dict__[key]
+                continue
             record.__dict__[key] = self._safe_extra(value)
         if record.exc_info:
             exc = record.exc_info[1] if isinstance(record.exc_info, tuple) else None
