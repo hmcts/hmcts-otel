@@ -109,7 +109,7 @@ DEFAULT_RULES: tuple[RedactionRule, ...] = (
 # rules applications add). Redaction runs on a slightly longer prefix so a secret
 # straddling the cut is still matched in full.
 MAX_TEXT_LENGTH = 32_768
-_REDACTION_MARGIN = 8_192 + 512
+_REDACTION_MARGIN = 3 * 8_192 + 2_048
 TRUNCATED = "...[truncated]"
 
 
