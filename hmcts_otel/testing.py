@@ -123,6 +123,9 @@ class TelemetryCapture:
         for span in self.finished_spans():
             parts.append(span.name)
             parts.append(json.dumps(dict(span.attributes or {}), default=str))
+            parts.append(json.dumps(dict(span.resource.attributes or {}), default=str))
+            for link in span.links:
+                parts.append(json.dumps(dict(link.attributes or {}), default=str))
             if span.status.description:
                 parts.append(span.status.description)
             for event in span.events:
