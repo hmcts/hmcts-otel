@@ -256,6 +256,11 @@ def scrub_attributes(
     for key, value in attributes.items():
         if key == EXCEPTION_FORMATTED or is_genai_content_key(key):
             continue
+        # The key can be the sensitive value (an email used as an attribute name).
+        # RedactingFilter deletes those keys; redacting only the value would export
+        # the key. Span attributes and Logs API records use this function.
+        if redactor.matches(key):
+            continue
         if key in _QUERY_KEYS or is_secret_key(key):
             out[key] = REDACTED if value else value
             continue

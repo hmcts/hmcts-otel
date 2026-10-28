@@ -4,12 +4,21 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [0.2.2] - unreleased
+## [0.2.2] - 2026-10-28
+
+First published release. 0.1.0, 0.2.0 and 0.2.1 were never tagged, so their changes
+ship in this version. That includes the 0.2.1 relay defaults: without `journey_types`
+a browser journey is denied, and browser journey IDs must be UUIDs.
 
 Privacy fixes, and scrubbing of log records emitted through the OpenTelemetry Logs API.
 No API changes. **Behaviour notes:** some lines are now redacted further than before
 (see "Changed"), and dropped-attribute warnings for browser events show unregistered
 keys as a hash.
+
+### Fixed (PR #5 review)
+- **An attribute key that matches a redaction rule is dropped.** Span attributes and
+  OpenTelemetry log records used to keep the key and redact only the value, so a key
+  such as an email address was exported. `RedactingFilter` already deletes those keys.
 
 ### Fixed (PR #4 review, round 4)
 - **A JWT straddling the truncation boundary is fully redacted.** Redaction runs on a
@@ -113,7 +122,7 @@ keys as a hash.
   `TelemetryCapture.exported_strings()` yields each string with its location.
   Needles are still searched for in all exported text.
 
-## [0.2.1] - unreleased
+## [0.2.1] - not published
 
 Security and privacy fixes, and stricter relay defaults. **Upgrading:** a service that
 mounts the relay must pass `journey_types` for browser journeys, and its browser
@@ -160,7 +169,7 @@ A service that removed `journey.parent_id` itself before the relay no longer nee
   release publishes the `pyproject.toml` version and fails if the release tag differs.
   The computation is in `scripts/artefact_version.sh`, with tests.
 
-## [0.2.0] - unreleased
+## [0.2.0] - not published
 
 ### Added (OBS-5: AI usage metering)
 - `hmcts_otel.ai_usage`: `record_llm_usage`, `record_speech_usage`, `ai_feature`,
@@ -186,7 +195,7 @@ A service that removed `journey.parent_id` itself before the relay no longer nee
   call arguments and results, `llm.prompts`, `input.value`, ...) are dropped from exported
   spans and span events, whichever instrumentation set them.
 
-## [0.1.0] - unreleased
+## [0.1.0] - not published
 
 ### Relay
 - `create_telemetry_relay_router(journey_types=...)`: browser events may attach only
