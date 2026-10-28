@@ -8,6 +8,7 @@ again: thousands of records in a few seconds (found by transcribe-api, its #25).
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 import pytest
 
@@ -71,14 +72,10 @@ def test_the_names_are_namespaces() -> None:
     assert all(not n.endswith(".") for n in EXPORT_PATH_LOGGERS)
 
 
-def test_the_real_exporter_does_not_export_its_own_upload_logs() -> None:
+def test_the_real_exporter_does_not_export_its_own_upload_logs(run_isolated: Callable[[str], str]) -> None:
     """End to end, in a subprocess: the real distro and exporter, uploading to a local
     endpoint that accepts every batch. One application record must be exported once,
     not followed by the exporter's and HTTP policy's records about each upload."""
-    import subprocess
-    import sys
-    from pathlib import Path
-
     script = r"""
 import gzip, json, logging, os, threading, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -128,14 +125,5 @@ time.sleep(4)
 shutdown_telemetry(2000)
 print("RESULT", sum("the one application record" in m for m in messages), len(messages))
 """
-    root = Path(__file__).resolve().parent.parent
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=root,
-        env={**__import__("os").environ, "PYTHONPATH": str(root)},
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    line = next((x for x in result.stdout.splitlines() if x.startswith("RESULT")), result.stderr[-2000:])
+    line = run_isolated(script)
     assert line == "RESULT 1 1", line

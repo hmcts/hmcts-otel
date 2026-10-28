@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -186,17 +187,13 @@ def test_otel_sdk_disabled_means_stdout_only(monkeypatch: pytest.MonkeyPatch) ->
     assert is_configured() and setup_mod.STATE.tracer_provider is None
 
 
-def test_real_distro_builds_exactly_one_trace_pipeline() -> None:
+def test_real_distro_builds_exactly_one_trace_pipeline(run_isolated: Callable[[str], str]) -> None:
     """Runs the real distro (in a subprocess: global providers are set-once per process).
 
     Regression: the distro overwrote disable_tracing and built a second tracer provider
     with an unscrubbed exporter. Exactly one AzureMonitorTraceExporter must exist, and it
     must sit behind the scrubbing exporter.
     """
-    import subprocess
-    import sys
-    from pathlib import Path
-
     script = """
 import gc, logging
 from azure.monitor.opentelemetry.exporter import AzureMonitorTraceExporter
@@ -211,14 +208,5 @@ wrapped = [o for o in exporters if any(type(r).__name__ == "ScrubbingSpanExporte
 print("RESULT", len(exporters), len(wrapped), trace.get_tracer_provider() is s.STATE.tracer_provider)
 shutdown_telemetry(500)
 """
-    root = Path(__file__).resolve().parent.parent
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=root,
-        env={**__import__("os").environ, "PYTHONPATH": str(root)},
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    line = next((x for x in result.stdout.splitlines() if x.startswith("RESULT")), result.stderr[-2000:])
+    line = run_isolated(script)
     assert line == "RESULT 1 1 True", line
