@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.3] - unreleased
+
+### Fixed
+- **The export path's own log records are no longer exported.** The Azure Monitor
+  exporter logs every upload at INFO, and so does the HTTP logging policy of the
+  pipeline it uploads with. Exported, each record caused another upload, which logged
+  again: one application log became over 4,000 exported records in a few seconds,
+  until something lowered those loggers' levels (found by transcribe-api, its #25).
+  Records from `azure.monitor.opentelemetry`, `azure.core.pipeline.policies.http_logging_policy`
+  and `opentelemetry` (whose own warnings would feed the same loop during an outage)
+  are now kept off the exporting handler, in both setup paths. They still reach stdout,
+  and no logger's level changes. A service no longer needs to quieten the Azure SDK
+  first; doing so is harmless.
+
 ## [0.2.2] - 2026-10-28
 
 First published release. 0.1.0, 0.2.0 and 0.2.1 were never tagged, so their changes

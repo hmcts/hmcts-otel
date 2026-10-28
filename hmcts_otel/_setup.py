@@ -30,7 +30,14 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcess
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 
 from hmcts_otel import _span_exceptions, _state
-from hmcts_otel._logging import StdoutHandler, add_filters, configure_logging, make_filters, remove_handlers
+from hmcts_otel._logging import (
+    ExportPathFilter,
+    StdoutHandler,
+    add_filters,
+    configure_logging,
+    make_filters,
+    remove_handlers,
+)
 from hmcts_otel._scrubbing import ScrubbingLogRecordProcessor, ScrubbingSpanExporter
 from hmcts_otel._state import LOCK, STATE
 from hmcts_otel.context import JourneySpanProcessor
@@ -217,8 +224,9 @@ def _setup_azure(
             # Added before the distro's exporting processor.
             log_record_processors=[_log_scrubbing(settings, redactor)],
         )
-    # The distro attaches its OpenTelemetry log handler to the root logger.
-    filters = make_filters(redactor, settings)
+    # The distro attaches its OpenTelemetry log handler to the root logger. It exports,
+    # so the export path's own records are kept off it (ExportPathFilter).
+    filters = [*make_filters(redactor, settings), ExportPathFilter()]
     for handler in root.handlers:
         if handler not in before:
             add_filters(handler, filters)
@@ -274,7 +282,7 @@ def _setup_custom(
         logger_provider.add_log_record_processor(_log_scrubbing(settings, redactor))  # first: scrubs in place
         logger_provider.add_log_record_processor(SimpleLogRecordProcessor(log_exporter))
         handler = _otel_logging_handler(logger_provider)
-        add_filters(handler, make_filters(redactor, settings))
+        add_filters(handler, [*make_filters(redactor, settings), ExportPathFilter()])
         logging.getLogger().addHandler(handler)
         STATE.handlers.append(handler)
 

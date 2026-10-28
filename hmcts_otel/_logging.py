@@ -201,6 +201,27 @@ class TextFormatter(logging.Formatter):
         super().__init__("%(asctime)s %(levelname)s %(name)s %(message)s")
 
 
+# Loggers on the export path itself. Their records are never exported: the Azure Monitor
+# exporter logs every upload at INFO, and so does the HTTP logging policy of the pipeline
+# it uploads with, so an exported record causes another upload, which logs again (a
+# feedback loop of thousands of records a second). The OpenTelemetry SDK's own warnings
+# (dropped batches, failed exports) would feed the same loop during an outage. The
+# records still reach the process's other handlers (stdout); no logger's level changes.
+EXPORT_PATH_LOGGERS = (
+    "azure.monitor.opentelemetry",
+    "azure.core.pipeline.policies.http_logging_policy",
+    "opentelemetry",
+)
+
+
+class ExportPathFilter(logging.Filter):
+    """Keeps records from the export path's own loggers out of exported telemetry."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        name = record.name
+        return not any(name == prefix or name.startswith(prefix + ".") for prefix in EXPORT_PATH_LOGGERS)
+
+
 def make_filters(redactor: Redactor, settings: TelemetrySettings) -> list[logging.Filter]:
     return [
         ContextFilter(),
