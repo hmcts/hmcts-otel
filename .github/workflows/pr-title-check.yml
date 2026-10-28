@@ -9,6 +9,9 @@ permissions: {}
 
 jobs:
   pr-title-check:
+    # Dependency bots open PRs with titles of their own and no ticket reference. A
+    # skipped job counts as passed for a required check; everyone else is checked.
+    if: ${{ !contains(fromJSON('["renovate[bot]", "dependabot[bot]"]'), github.event.pull_request.user.login) }}
     runs-on: ubuntu-latest
     steps:
       - name: Validate PR title
