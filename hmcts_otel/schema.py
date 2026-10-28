@@ -15,8 +15,8 @@ from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 
 from hmcts_otel import conventions as c
-from hmcts_otel.conventions import EventClass, EventSource, Outcome
-from hmcts_otel.redaction import Redactor, default_redactor
+from hmcts_otel.conventions import EventClass, EventSource, Outcome, SpeechMode
+from hmcts_otel.redaction import Redactor
 
 AttributeValue = str | bool | int | float
 
@@ -32,6 +32,7 @@ RESERVED_NAMES = frozenset(vars(logging.LogRecord("x", logging.INFO, "x", 0, "x"
 _ID_PATTERN = r"[A-Za-z0-9_-]{1,64}"
 _CODE_PATTERN = r"[A-Za-z0-9_.:-]{1,64}"
 _SLUG_PATTERN = r"[a-z0-9][a-z0-9_.-]{0,63}"
+_STAGE_PATTERN = r"[a-z][a-z0-9_.]{0,63}"
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,23 @@ class EventSpec:
 
 _JOURNEY_KEYS = (c.JOURNEY_TYPE, c.JOURNEY_ID, c.JOURNEY_PARENT_ID)
 
+# Event metadata hmcts-otel sets itself, from the call, the journey context and the
+# request: never taken from caller-supplied attributes, on any path. A caller (or a
+# browser via the relay) passing one has it dropped and counted (reason "reserved").
+# The request ID is reserved too, except on an event whose registration lists it
+# explicitly (e.g. a browser "error report copied" event naming the failed request).
+METADATA_KEYS: frozenset[str] = frozenset(
+    {
+        c.CUSTOM_EVENT_NAME,
+        c.JOURNEY_TYPE,
+        c.JOURNEY_ID,
+        c.JOURNEY_PARENT_ID,
+        c.EVENT_SOURCE,
+        c.EVENT_CLASS,
+        c.DURATION_MS,
+    }
+)
+
 
 def _core_attributes() -> list[AttributeSpec]:
     return [
@@ -96,7 +114,18 @@ def _core_attributes() -> list[AttributeSpec]:
         AttributeSpec(
             c.JOURNEY_PARENT_ID, description="Parent journey, e.g. the batch a file belongs to.", pattern=_ID_PATTERN
         ),
-        AttributeSpec(c.STAGE, description="Stage name.", pattern=r"[a-z][a-z0-9_.]{0,63}"),
+        AttributeSpec(c.STAGE, description="Stage name.", pattern=_STAGE_PATTERN),
+        AttributeSpec(
+            c.AI_FEATURE,
+            description="Product feature an AI call served, e.g. summarise. Defaults to the current stage.",
+            pattern=_STAGE_PATTERN,
+        ),
+        AttributeSpec(c.AI_FALLBACK, type=bool, description="Whether an AI call was a fallback to another model."),
+        AttributeSpec(
+            c.SPEECH_MODE,
+            description="Speech transcription mode.",
+            allowed_values=frozenset(m.value for m in SpeechMode),
+        ),
         AttributeSpec(c.OUTCOME, description="Stage outcome.", allowed_values=frozenset(o.value for o in Outcome)),
         AttributeSpec(c.ERROR_CODE, description="Controlled error code. Never a message.", pattern=_CODE_PATTERN),
         AttributeSpec(
@@ -126,12 +155,27 @@ class TelemetrySchema:
         self._attributes: dict[str, AttributeSpec] = {}
         self._events: dict[str, EventSpec] = {}
         self._lock = threading.Lock()
-        self.redactor = redactor or default_redactor
+        self._redactor = redactor
         self.core_keys: frozenset[str] = frozenset()
         if include_core:
             for spec in _core_attributes():
                 self._attributes[spec.name] = spec
             self.core_keys = frozenset(self._attributes)
+
+    @property
+    def redactor(self) -> Redactor:
+        """The redactor validation uses: the one given to this schema, otherwise the
+        redactor configured by ``setup_telemetry`` (so custom rules apply), otherwise
+        the default."""
+        if self._redactor is not None:
+            return self._redactor
+        from hmcts_otel import _state  # imported here: _state is set up after schemas
+
+        return _state.current_redactor()
+
+    @redactor.setter
+    def redactor(self, value: Redactor) -> None:
+        self._redactor = value
 
     # Registration -----------------------------------------------------------------
 
@@ -208,21 +252,32 @@ class TelemetrySchema:
     # Validation -------------------------------------------------------------------
 
     def validate(
-        self, values: Mapping[str, object], *, allowed: Collection[str] | None = None
+        self,
+        values: Mapping[str, object],
+        *,
+        allowed: Collection[str] | None = None,
+        reserved: Collection[str] = (),
+        core_exempt: bool = True,
     ) -> tuple[dict[str, AttributeValue], list[tuple[str, str]]]:
         """Split ``values`` into accepted attributes and ``(key, reason)`` drops.
 
         ``allowed`` narrows the keys further (e.g. to an event's declared attributes).
-        Journey keys and core keys are always allowed if registered.
+        Core keys are exempt from ``allowed`` unless ``core_exempt`` is false (the
+        browser relay: there an event's registered attributes are the whole allowlist).
+        Keys in ``reserved`` are always dropped (reason ``reserved``).
         """
         clean: dict[str, AttributeValue] = {}
         dropped: list[tuple[str, str]] = []
         for key, value in values.items():
+            if key in reserved:
+                dropped.append((key, "reserved"))
+                continue
             spec = self._attributes.get(key)
             if spec is None:
                 dropped.append((key, "unregistered"))
                 continue
-            if allowed is not None and key not in allowed and key not in self.core_keys:
+            exempt = core_exempt and key in self.core_keys
+            if allowed is not None and key not in allowed and not exempt:
                 dropped.append((key, "not_allowed_for_event"))
                 continue
             checked, reason = spec.check(value, self.redactor)

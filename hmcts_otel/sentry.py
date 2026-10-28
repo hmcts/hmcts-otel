@@ -24,7 +24,7 @@ from opentelemetry import trace
 from hmcts_otel import conventions as c
 from hmcts_otel.context import context_attributes
 from hmcts_otel.conventions import REDACTED
-from hmcts_otel.redaction import Redactor, default_redactor
+from hmcts_otel.redaction import Redactor, default_redactor, is_secret_key
 from hmcts_otel.settings import TelemetrySettings
 
 _KEEP_REQUEST_KEYS = ("method", "url")
@@ -40,8 +40,12 @@ def _redact_deep(value: Any, redactor: Redactor, depth: int = 0) -> Any:
     if isinstance(value, str):
         return redactor.redact(value)
     if isinstance(value, dict):
+        # A secret-named entry ({"AccountKey": "..."}) is redacted whole: its key and value,
+        # scrubbed apart, would never form the "key=value" pair the rules look for.
         return {
-            k: _redact_deep(v, redactor, depth + 1)
+            (redactor.redact(k) if isinstance(k, str) else k): (
+                REDACTED if is_secret_key(k) else _redact_deep(v, redactor, depth + 1)
+            )
             for k, v in value.items()
             if not (isinstance(k, str) and k in _QUERY_KEYS)
         }
@@ -96,9 +100,8 @@ def scrub_event(
             for item in values:
                 if isinstance(item, dict) and item.get("value"):
                     item["value"] = REDACTED
-    event = _redact_deep(event, redactor)
     _tag_with_context(event)
-    return event
+    return _redact_deep(event, redactor)
 
 
 def scrub_breadcrumb(crumb: dict[str, Any], redactor: Redactor) -> dict[str, Any] | None:

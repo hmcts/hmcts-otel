@@ -168,28 +168,48 @@ class RelayBatch(BaseModel):
 
 
 class _FixedWindowLimiter:
-    """Per-process, per-identity request limit. Multiple replicas each apply their own."""
+    """Per-process, per-identity request limit. Multiple replicas each apply their own.
 
-    def __init__(self, limit: int, window_s: float = 60.0, max_keys: int = 10_000) -> None:
+    At most ``max_keys`` identities are tracked. Expired buckets are pruned only when a
+    new identity arrives at capacity, and at most once per ``prune_interval_s``, so the
+    work per request stays bounded however many identities arrive. While still at
+    capacity a new identity is refused (counted as ``invalid.relay_capacity``) and the
+    identities already tracked keep their state, so nobody's limit is reset.
+    """
+
+    def __init__(
+        self, limit: int, window_s: float = 60.0, max_keys: int = 10_000, prune_interval_s: float = 5.0
+    ) -> None:
         self.limit = limit
         self.window_s = window_s
         self.max_keys = max_keys
+        self.prune_interval_s = min(prune_interval_s, window_s)
         self._buckets: dict[str, tuple[float, int]] = {}
+        self._next_prune = 0.0
         self._lock = threading.Lock()
 
     def allow(self, key: str) -> bool:
         now = time.monotonic()
         with self._lock:
-            if len(self._buckets) > self.max_keys:
-                self._buckets = {k: v for k, v in self._buckets.items() if now - v[0] < self.window_s}
-            start, count = self._buckets.get(key, (now, 0))
-            if now - start >= self.window_s:
-                start, count = now, 0
-            if count >= self.limit:
-                self._buckets[key] = (start, count)
-                return False
-            self._buckets[key] = (start, count + 1)
-            return True
+            bucket = self._buckets.get(key)
+            if bucket is None and len(self._buckets) >= self.max_keys:
+                if now >= self._next_prune:
+                    self._next_prune = now + self.prune_interval_s
+                    self._buckets = {k: v for k, v in self._buckets.items() if now - v[0] < self.window_s}
+                at_capacity = len(self._buckets) >= self.max_keys
+            else:
+                at_capacity = False
+            if not at_capacity:
+                start, count = bucket or (now, 0)
+                if now - start >= self.window_s:
+                    start, count = now, 0
+                if count >= self.limit:
+                    self._buckets[key] = (start, count)
+                    return False
+                self._buckets[key] = (start, count + 1)
+                return True
+        _guard.invalid_data("relay_capacity")
+        return False
 
 
 def _default_identity(request: Request) -> str:
@@ -204,6 +224,7 @@ def create_telemetry_relay_router(
     identity: Callable[[Request], str | None] | None = None,
     analytics_consent: Callable[[Request], bool] | None = None,
     journey_types: Collection[str] | None = None,
+    allow_parent_id: bool = False,
     max_body_bytes: int = 32_768,
     rate_limit_per_minute: int = 120,
 ) -> APIRouter:
@@ -212,14 +233,20 @@ def create_telemetry_relay_router(
     ``dependencies`` should include the application's authentication dependency.
     ``identity`` keys the rate limit (default: client address).
     ``analytics_consent`` decides whether analytics-class events are accepted
-    (default: never). ``journey_types`` limits the journeys a browser may attach
-    events to (default: any): journey IDs come from the client, so without it a
-    user could write events into a server-side journey such as another user's job.
+    (default: never). ``journey_types`` lists the journeys a browser may attach
+    events to (default: none). Journey IDs come from the client, so a listed type
+    must be one the browser owns (e.g. its own session), never a server-side
+    journey such as another user's job. An event whose journey type is not listed
+    is rejected. Journey ``id`` and ``parent_id`` must be a UUID or 32 hex characters
+    (anything else, such as a name or phone number, rejects the event).
+    ``allow_parent_id`` keeps a browser-sent ``parent_id`` (default: dropped, since it
+    would let a user link their events under any journey).
     Responses never echo the submitted content.
     """
     schema = schema or default_schema
     limiter = _FixedWindowLimiter(rate_limit_per_minute)
     identify = identity or _default_identity
+    allowed_journeys = frozenset(journey_types or ())
     router = APIRouter(dependencies=list(dependencies))
 
     @router.post(path, status_code=202, include_in_schema=True, summary="Browser telemetry relay")
@@ -262,11 +289,17 @@ def create_telemetry_relay_router(
                 continue
             journey = None
             if event.journey is not None:
-                if journey_types is not None and event.journey.type not in journey_types:
+                if event.journey.type not in allowed_journeys:
+                    rejected += 1
+                    continue
+                parent_id = event.journey.parent_id if allow_parent_id else None
+                if not is_valid_request_id(event.journey.id) or (
+                    parent_id is not None and not is_valid_request_id(parent_id)
+                ):
                     rejected += 1
                     continue
                 try:
-                    journey = Journey(event.journey.type, event.journey.id, event.journey.parent_id)
+                    journey = Journey(event.journey.type, event.journey.id, parent_id)
                 except ValueError:
                     rejected += 1
                     continue

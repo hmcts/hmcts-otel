@@ -54,7 +54,7 @@ def _post(client: TestClient, events: list[dict], **kwargs):
 
 
 def test_relay_records_valid_browser_events(tel: TelemetryCapture, relay_schema: TelemetrySchema) -> None:
-    client = TestClient(_app(relay_schema))
+    client = TestClient(_app(relay_schema, journey_types={"dictation.session"}))
     jid = str(uuid.uuid4())
     resp = _post(
         client,

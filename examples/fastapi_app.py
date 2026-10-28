@@ -41,6 +41,8 @@ app.include_router(
     create_telemetry_relay_router(
         path="/api/telemetry",
         analytics_consent=lambda request: request.cookies.get("analytics") == "yes",
+        # Journeys the browser owns. Without this, events carrying a journey are rejected.
+        journey_types={"dictation.session"},
     )
 )
 

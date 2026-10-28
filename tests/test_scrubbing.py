@@ -3,7 +3,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import Status, StatusCode
 
-from hmcts_otel._scrubbing import ScrubbingSpanExporter, scrub_attributes
+from hmcts_otel._scrubbing import ScrubbingLogRecordProcessor, ScrubbingSpanExporter, scrub_attributes
 from hmcts_otel.redaction import default_redactor
 
 
@@ -44,6 +44,23 @@ def test_auto_instrumentation_style_attributes_are_scrubbed() -> None:
     assert event.attributes["exception.message"] == "[REDACTED]"
     assert "appellant's name" not in event.attributes["exception.stacktrace"]
     assert out.context == out.context  # identity preserved for correlation
+
+
+def test_a_key_that_matches_a_redaction_rule_is_dropped() -> None:
+    """The key is the sensitive value. Removing the drop exports the email as a key."""
+    key = "user.jane.doe@example.com"
+    attrs = scrub_attributes({key: "x", "note": "ok"}, default_redactor, include_exception_messages=False)
+    assert key not in attrs
+    assert attrs == {"note": "ok"}
+
+    class Record:
+        attributes: dict[str, str] = {key: "x"}
+        body = "ok"
+        event_name = None
+
+    record = Record()
+    ScrubbingLogRecordProcessor(default_redactor).on_emit(record)
+    assert key not in dict(record.attributes)
 
 
 def test_exception_messages_kept_when_enabled() -> None:

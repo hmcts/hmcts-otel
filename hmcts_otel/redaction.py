@@ -25,8 +25,58 @@ class RedactionRule:
 
 
 def _keep_key(match: re.Match[str]) -> str:
-    # group 1: key, group 2: separator as written (e.g. '=', '="', '": "'), group 3: value
-    return f"{match.group(1)}{match.group(2)}{REDACTED}"
+    # group 1: key, group 2: separator as written (e.g. '=', '": '), group 3: value,
+    # including any quotes or braces around it, which are kept.
+    value = match.group(3)
+    opening = value[0] if value[0] in "\"'{" else ""
+    closing = {'"': '"', "'": "'", "{": "}"}.get(opening, "")
+    if not (len(value) > 1 and value.endswith(closing)):
+        closing = ""
+    return f"{match.group(1)}{match.group(2)}{opening}{REDACTED}{closing}"
+
+
+# Names of keys whose values are secrets: the secret_key_value rule's keys, also used by
+# is_secret_key() for structured data (Sentry dicts, log extras, span attributes), where
+# a key and its value are checked separately and so never form a "key=value" pair.
+_SECRET_KEY_ALIASES = (
+    r"AccountKey|SharedAccessKey|SharedAccessSignature|sig|password|pwd|secret|client_secret"
+    r"|api[_-]?key|access_token|refresh_token"
+)
+# A structured key names a secret if its last one to three words, joined, are one of these
+# (words split at ".", "-", "_", spaces and camelCase): "db.password", "x-api-key",
+# "AzureStorageAccountKey", "client_secret", "Authorization". "design" or "token_count"
+# do not ("sig" and "token" must be whole words, and the last ones).
+_SECRET_KEY_WORDS = frozenset(
+    {
+        "accountkey",
+        "sharedaccesskey",
+        "sharedaccesssignature",
+        "sig",
+        "password",
+        "passwd",
+        "pwd",
+        "secret",
+        "clientsecret",
+        "apikey",
+        "accesstoken",
+        "refreshtoken",
+        "token",
+        "authorization",
+        "credential",
+        "credentials",
+        "privatekey",
+        "connectionstring",
+    }
+)
+_KEY_WORD = re.compile(r"[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])")
+
+
+def is_secret_key(name: object) -> bool:
+    """Whether a structured key (dict key, attribute name) names a secret value."""
+    if not isinstance(name, str) or len(name) > 256:
+        return False
+    words = [w.lower() for w in _KEY_WORD.findall(name)]
+    return any("".join(words[-n:]) in _SECRET_KEY_WORDS for n in (1, 2, 3) if len(words) >= n)
 
 
 def _keep_url(match: re.Match[str]) -> str:
@@ -37,6 +87,12 @@ def _keep_url(match: re.Match[str]) -> str:
 # each rule runs in linear time on adversarial input (long runs of letters, dots,
 # slashes, "http://"). See tests/test_redaction.py::test_rules_are_linear_time.
 DEFAULT_RULES: tuple[RedactionRule, ...] = (
+    # URL credentials first: the email rule would otherwise consume "password@host.domain"
+    # and leave the username behind ("https://user:[REDACTED]/path").
+    # The whole userinfo, any length, with or without a password (user@, user:@, user:pw@):
+    # everything after "://" up to "@" that cannot end an authority. One start per "://",
+    # and possessive, so linear-time. (An "@" past the inspected prefix: see Redactor.)
+    RedactionRule("url_userinfo", re.compile(r"(?<=://)[^/\s?#@\[\]\"'<>]++@")),
     RedactionRule(
         "email",
         # Local part: the RFC 5322 dot-atom set (o'brien@..., foo!bar@...), bounded.
@@ -44,25 +100,57 @@ DEFAULT_RULES: tuple[RedactionRule, ...] = (
             r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}"
         ),
     ),
-    RedactionRule("jwt", re.compile(r"\beyJ[A-Za-z0-9_-]{1,8192}\.[A-Za-z0-9_-]{1,8192}\.[A-Za-z0-9_-]{1,8192}")),
+    # Tokens fail closed: a token of any length is consumed whole, never cut at a bound
+    # with its remainder exported. Possessive quantifiers (Python 3.11+) never backtrack,
+    # so each rule stays linear-time however long the token is.
+    # JWT: "eyJ" (base64 of '{"') and its segments. With at least one dot, any length;
+    # without a dot (a truncated or oversized token), 16+ characters.
+    RedactionRule(
+        "jwt",
+        re.compile(r"\beyJ[A-Za-z0-9_-]++(?:\.[A-Za-z0-9_-]*+){1,2}|\beyJ[A-Za-z0-9_-]{13,}+"),
+    ),
     # Tokens are long; requiring 16+ characters avoids "the bearer of the warrant".
-    RedactionRule("bearer", re.compile(r"(?i)\bbearer\s{1,8}[A-Za-z0-9._~+/-]{16,4096}=*")),
+    RedactionRule("bearer", re.compile(r"(?i)\bbearer\s{1,8}[A-Za-z0-9._~+/-]{16,}+=*")),
     RedactionRule(
         "secret_key_value",
         re.compile(
-            r"(?i)\b(AccountKey|SharedAccessKey|SharedAccessSignature|sig|password|pwd|secret|client_secret"
-            r"|api[_-]?key|access_token|refresh_token)"
-            # key=value, key="value", key='value', "key": "value", key: value
-            r"(\"?\s{0,3}[=:]\s{0,3}[\"']?)(?!\[REDACTED\])([^;&\s\"',}]{1,4096})"
+            rf"(?i)\b({_SECRET_KEY_ALIASES})"
+            # key=value, key="value", key='value', "key": "value", key: value. Up to
+            # three spaces may follow the separator; they are kept, and never given
+            # back to the value (possessive), so redaction stays idempotent.
+            r"([\"']?\s{0,3}[=:]\s{0,3}+)(?![\"'{]?\[REDACTED\])("
+            # Each value has a bounded fast path and fails closed past it: a longer value
+            # is redacted to its closing quote or brace if one follows on the same line,
+            # otherwise to the end of the line (a connection-string value to ';'). The
+            # overflow paths are reached only after a key and never fail, so each match
+            # scans at most to the end of its line and redaction stays linear. The cost
+            # is occasional over-redaction of the rest of a line.
+            # Quoted: to the closing quote (backslash escapes allowed), or the end of
+            # the line if unclosed.
+            r"\"(?:[^\"\\\r\n]|\\.){1,4096}(?:\"|[^\"\\\r\n]*(?:\\.[^\"\\\r\n]*)*\"?)"
+            r"|'(?:[^'\\\r\n]|\\.){1,4096}(?:'|[^'\\\r\n]*(?:\\.[^'\\\r\n]*)*'?)"
+            # ODBC braced: Pwd={two words}
+            r"|\{(?:[^}\r\n]{1,256}\}|[^}\r\n]{257,}\}?)"
+            # Connection string, Password=two words;: after '=' (and any spaces), up to
+            # ';' or the end of the line, if no other key=value intervenes.
+            r"|(?:(?<==)|(?<==\s)|(?<==\s\s)|(?<==\s\s\s))"
+            r"(?:[^;=\r\n\"'{}]{1,256}(?=;|\r|\n|\Z)|[^;=\r\n\"'{}]{257}[^;\r\n]*)"
+            # Otherwise words up to the next delimiter (; & , } or a quote), the end of
+            # the line, or the next key=value / key: value pair, so a value with spaces
+            # (password: two words) is redacted whole and a key=value log line keeps its
+            # other fields (password=x user=u1 keeps user=u1). Each word is consumed whole.
+            r"|[^;&\s\"',}]+(?:[ \t]{1,3}(?![\w.-]{1,64}\s{0,3}[=:])[^;&\s\"',}]+)*)"
         ),
         _keep_key,
     ),
-    RedactionRule("url_userinfo", re.compile(r"(?i)(?<=://)[^/\s:@]{1,256}:[^/\s@]{1,256}@")),
     # Query strings of absolute URLs (search terms, tokens, identifiers), e.g. in
     # httpx's "HTTP Request: GET https://...?..." INFO logs.
     RedactionRule(
         "url_query",
-        re.compile(r"(?i)\b(https?://[^\s?#\"'<>]{1,2048})\?(?!\[REDACTED\])[^\s#\"'<>]+"),
+        # Any length, still linear: the URL part never crosses another "http(s)://", so in
+        # "https://https://..." each character is scanned by one attempt only, and the
+        # possessive quantifier never backtracks.
+        re.compile(r"(?i)\b(https?://(?:(?!https?://)[^\s?#\"'<>])*+)\?(?!\[REDACTED\])[^\s#\"'<>]+"),
         _keep_url,
     ),
     # Query strings of relative paths, e.g. access-log request lines "GET /search?q=... HTTP/1.1".
@@ -70,7 +158,7 @@ DEFAULT_RULES: tuple[RedactionRule, ...] = (
     # characters has a single start position.
     RedactionRule(
         "path_query",
-        re.compile(r"(?<![\w:/.?=&%~-])(/[\w\-./%~]{0,2048})\?(?!\[REDACTED\])[^\s#\"'<>]+"),
+        re.compile(r"(?<![\w:/.?=&%~!$'()*+,;@-])(/[\w./%~!$&'()*+,;=:@-]*+)\?(?!\[REDACTED\])[^\s#\"'<>]+"),
         _keep_url,
     ),
 )
@@ -80,8 +168,36 @@ DEFAULT_RULES: tuple[RedactionRule, ...] = (
 # rules applications add). Redaction runs on a slightly longer prefix so a secret
 # straddling the cut is still matched in full.
 MAX_TEXT_LENGTH = 32_768
-_REDACTION_MARGIN = 8_192 + 512
+# The margin covers the longest bounded match of a default rule that can start before
+# the cut, so a secret straddling it is still matched in full. JWT and bearer tokens are
+# unbounded and fail closed (a token running past the cut is redacted up to it); the
+# margin is kept at its former JWT-derived size (24,579 + 2,048) as a safe upper bound
+# for the remaining bounded rules.
+_JWT_SEGMENT_MAX = 8_192
+_LONGEST_DEFAULT_MATCH = len("eyJ") + 3 * _JWT_SEGMENT_MAX + 2
+_REDACTION_MARGIN = _LONGEST_DEFAULT_MATCH + 2_048
 TRUNCATED = "...[truncated]"
+
+
+_AUTHORITY_END = re.compile(r"[/\s?#\[\]\"'<>]")
+
+
+def _userinfo_across(text: str, cut: int) -> int | None:
+    """Where a URL's userinfo starts if it runs past ``cut`` (its "@" is not inspected).
+
+    The rules only see ``text[:cut]``, so ``https://user:pw...@host`` straddling the cut
+    would keep its credentials. Returns the index just after "://" when the authority
+    has neither ended nor reached its "@" before the cut, and an "@" follows after it.
+    """
+    start = text.rfind("://", 0, cut)
+    if start < 0:
+        return None
+    start += 3
+    if _AUTHORITY_END.search(text, start, cut) or text.find("@", start, cut) >= 0:
+        return None
+    end_match = _AUTHORITY_END.search(text, cut)
+    end = end_match.start() if end_match else len(text)
+    return start if text.find("@", cut, end) >= 0 else None
 
 
 class Redactor:
@@ -103,7 +219,10 @@ class Redactor:
     def redact(self, text: str) -> str:
         truncated = len(text) > MAX_TEXT_LENGTH
         if truncated:
-            text = text[: MAX_TEXT_LENGTH + _REDACTION_MARGIN]
+            cut = MAX_TEXT_LENGTH + _REDACTION_MARGIN
+            across = _userinfo_across(text, cut)
+            # Fail closed: credentials whose "@" lies past the cut are redacted to the cut.
+            text = text[:across] + REDACTED if across is not None else text[:cut]
         for rule in self._rules:
             text = rule.pattern.sub(rule.replacement, text)
         if truncated:
@@ -112,8 +231,11 @@ class Redactor:
 
     def matches(self, text: str) -> list[str]:
         """Names of the rules that match ``text``. Never returns the matched values."""
-        text = text[: MAX_TEXT_LENGTH + _REDACTION_MARGIN]
-        return [rule.name for rule in self._rules if rule.pattern.search(text)]
+        cut = MAX_TEXT_LENGTH + _REDACTION_MARGIN
+        found = [rule.name for rule in self._rules if rule.pattern.search(text[:cut])]
+        if len(text) > cut and "url_userinfo" not in found and _userinfo_across(text, cut) is not None:
+            found.append("url_userinfo")
+        return found
 
 
 default_redactor = Redactor()

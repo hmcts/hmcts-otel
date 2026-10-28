@@ -19,7 +19,8 @@ from opentelemetry import trace
 from hmcts_otel._exceptions import exception_attributes
 from hmcts_otel.context import context_attributes
 from hmcts_otel.conventions import EXCEPTION_FORMATTED, REDACTED
-from hmcts_otel.redaction import Redactor
+from hmcts_otel.redaction import REDACTED as _REDACTED_VALUE
+from hmcts_otel.redaction import Redactor, is_secret_key
 from hmcts_otel.settings import TelemetrySettings
 
 EVENTS_LOGGER = "hmcts_otel.events"
@@ -68,12 +69,20 @@ class RedactingFilter(logging.Filter):
         # here would reach the logging call site (and could replace an exception
         # being handled there). Fail closed: keep the record, drop its content.
         try:
+            record.name = self._redactor.redact(record.name)
+            if record.stack_info:
+                record.stack_info = self._redactor.redact(record.stack_info)
             self._redact(record)
         except Exception as exc:
+            record.name = "[unformattable logger name]"
             record.msg = "[unformattable log record]"
             record.args = None
             record.exc_info = None
             record.exc_text = None
+            record.stack_info = None
+            # Extras (``extra=``, context) may be partly or not at all redacted.
+            for key in list(_extra_items(record)):
+                del record.__dict__[key]
             try:
                 from hmcts_otel import _guard
 
@@ -90,10 +99,15 @@ class RedactingFilter(logging.Filter):
                 message = str(record.msg)
             except Exception:
                 message = "[unformattable log message]"
+        from hmcts_otel._scrubbing import is_genai_content_key
+
         record.msg = self._redactor.redact(message)
         record.args = None
         formatted_here = record in _FORMATTED_RECORDS
         for key, value in _extra_items(record).items():
+            if isinstance(key, str) and is_genai_content_key(key):
+                del record.__dict__[key]
+                continue
             if key in _EXCEPTION_KEYS:
                 # Exception text supplied via ``extra=`` is not trusted; only the
                 # package's own formatting (below, from exc_info) is. A record already
@@ -104,12 +118,19 @@ class RedactingFilter(logging.Filter):
                     else:
                         record.__dict__[key] = REDACTED
                 continue
+            if isinstance(key, str) and self._redactor.matches(key):
+                del record.__dict__[key]
+                continue
+            if is_secret_key(key):  # extra={"api_key": ...}: never a key=value pair
+                record.__dict__[key] = _REDACTED_VALUE
+                continue
             record.__dict__[key] = self._safe_extra(value)
         if record.exc_info:
             exc = record.exc_info[1] if isinstance(record.exc_info, tuple) else None
             if exc is not None:
+                # Keeps the EXCEPTION_FORMATTED marker, which tells the log record
+                # processor this stack trace is safe; the processor removes it.
                 attrs = exception_attributes(exc, include_messages=self._include_messages, redactor=self._redactor)
-                attrs.pop(EXCEPTION_FORMATTED, None)  # span-export marker; not needed on logs
                 record.__dict__.update(attrs)
                 _FORMATTED_RECORDS.add(record)
             # exc_info=True outside an except block gives (None, None, None): nothing to record.
@@ -121,17 +142,24 @@ class ContextFilter(logging.Filter):
     """Adds journey and request attributes. Explicit ``extra`` values win."""
 
     def filter(self, record: logging.LogRecord) -> bool:
+        if record.name == EVENTS_LOGGER:
+            return True
         for key, value in context_attributes().items():
             record.__dict__.setdefault(key, value)
         return True
 
 
 class JsonFormatter(logging.Formatter):
-    def __init__(self, settings: TelemetrySettings) -> None:
+    def __init__(self, settings: TelemetrySettings, redactor: Redactor | None = None) -> None:
         super().__init__()
-        self._static = {"service.name": settings.service_name, "deployment.environment": settings.environment}
+        # Added after the handler's redaction filter has run, so redacted here, once.
+        redact = redactor.redact if redactor is not None else (lambda text: text)
+        self._static = {
+            "service.name": redact(settings.service_name),
+            "deployment.environment": redact(settings.environment),
+        }
         if settings.service_version:
-            self._static["service.version"] = settings.service_version
+            self._static["service.version"] = redact(settings.service_version)
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
@@ -146,7 +174,8 @@ class JsonFormatter(logging.Formatter):
             payload["trace_id"] = format(span_context.trace_id, "032x")
             payload["span_id"] = format(span_context.span_id, "016x")
         for key, value in _extra_items(record).items():
-            payload[key] = value
+            if key != EXCEPTION_FORMATTED:
+                payload[key] = value
         if record.exc_info and record.exc_info[0] is not None:  # only if no RedactingFilter ran
             payload["exception.type"] = record.exc_info[0].__name__
         return json.dumps(payload, default=str)
@@ -232,7 +261,7 @@ def configure_logging(settings: TelemetrySettings, redactor: Redactor) -> list[l
         if isinstance(existing, StdoutHandler):
             root.removeHandler(existing)
     handler = StdoutHandler()
-    handler.setFormatter(JsonFormatter(settings) if settings.log_format == "json" else TextFormatter())
+    handler.setFormatter(JsonFormatter(settings, redactor) if settings.log_format == "json" else TextFormatter())
     add_filters(handler, filters)
     root.addHandler(handler)
     if not valid:

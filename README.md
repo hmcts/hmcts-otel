@@ -18,6 +18,7 @@ conventions and the privacy controls a judicial service needs.
 - [Quick start: worker or script](#quick-start-worker-or-script)
 - [Journeys, stages and events](#journeys-stages-and-events)
 - [Asynchronous jobs](#asynchronous-jobs)
+- [AI usage metering](#ai-usage-metering)
 - [Browser telemetry relay](#browser-telemetry-relay)
 - [Sentry](#sentry)
 - [Privacy model](#privacy-model)
@@ -34,6 +35,7 @@ conventions and the privacy controls a judicial service needs.
 | Traces | Request, dependency (HTTP, Postgres, Azure SDK) and stage spans | App Insights `requests` / `dependencies` |
 | Lifecycle events | `<stage>.started`, `.completed`, `.failed`, `.cancelled`, plus your own events | App Insights `customEvents`. Not trace-sampled; App Insights ingestion sampling must be 100% |
 | Metrics | `hmcts.stage.duration`, `hmcts.events`, `hmcts.event.duration`, `hmcts.telemetry.dropped_attributes`, `hmcts.telemetry.errors` | App Insights `customMetrics` (count, sum, min, max per interval) |
+| AI usage | `gen_ai.client.token.usage`, `hmcts.ai.requests`, `hmcts.speech.audio.duration`: tokens and audio seconds by model and feature, never content | App Insights `customMetrics`. Never sampled |
 | Errors (optional) | Hardened Sentry setup for triage | Sentry |
 
 ## Install
@@ -43,7 +45,7 @@ The package is published to the HMCTS `hmcts-lib` Azure Artifacts feed.
 ```toml
 # pyproject.toml (uv)
 [project]
-dependencies = ["hmcts-otel[fastapi,sentry]>=0.1,<0.2"]
+dependencies = ["hmcts-otel[fastapi,sentry]>=0.2,<0.3"]
 
 [[tool.uv.index]]
 name = "hmcts-lib"
@@ -58,6 +60,9 @@ Extras:
 | `sqlalchemy` | SQLAlchemy instrumentation package |
 | `sentry` | `sentry-sdk`, initialised automatically when `SENTRY_DSN` is set |
 | `entra` | `azure-identity`, for Entra-authenticated ingestion |
+
+There is no extra for litellm: `instrument_litellm()` uses the litellm your service
+already depends on and imports it only when called.
 
 Do not vendor the wheel. Resolve it from the feed and let Dependabot or Renovate raise upgrades.
 
@@ -220,6 +225,110 @@ with journey("recording.job", job.id):
 All of a job's events carry `hmcts.journey.id`, so the full lifecycle is one query
 whatever the trace sampling.
 
+## AI usage metering
+
+Token and audio usage are recorded as **metrics**, which are pre-aggregated and never
+sampled. Only usage is recorded: **no prices and no cost**. Cost comes from the Azure
+and GCP bills, allocated by each feature's share of usage at query time, so there is
+no price table to keep up to date. **No prompt or response content is ever recorded.**
+
+| Metric | Type | Attributes |
+|---|---|---|
+| `gen_ai.client.token.usage` | histogram, `{token}` | `gen_ai.operation.name`, `gen_ai.provider.name`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.token.type` (`input` / `output`), `hmcts.ai.feature`, `hmcts.outcome`, `hmcts.ai.fallback` |
+| `hmcts.ai.requests` | counter, `{request}` | the same without the token type, plus `error.type` (exception class name) on failures |
+| `hmcts.speech.audio.duration` | counter, `s` | `hmcts.speech.mode` (`realtime`, `fast`, `batch`), `hmcts.ai.feature`, `hmcts.outcome` |
+
+`gen_ai.*` names follow the OpenTelemetry GenAI semantic conventions v1.37.0
+(`conventions.GEN_AI_SEMCONV_VERSION`). Each model call records one token point per
+token type and one request. `hmcts.ai.requests` exists so that call counts, error
+types and the fallback rate do not depend on token points.
+
+```python
+from hmcts_otel import ai_fallback, ai_feature, instrument_litellm, record_speech_usage
+
+setup_telemetry()
+instrument_litellm()  # once, after setup; keeps existing callbacks such as Langfuse
+
+with ai_feature("summarise"):  # or rely on the enclosing stage() name
+    response = await litellm.acompletion(model="azure/gpt-4o", messages=...)
+
+with ai_feature("summarise"), ai_fallback():  # the secondary model, after the primary failed
+    response = await litellm.acompletion(model="gemini/gemini-2.0-flash", messages=...)
+
+record_speech_usage(seconds=audio_seconds, mode="batch", feature="transcribe")
+```
+
+Without litellm, call `record_llm_usage(provider=..., request_model=..., response_model=...,
+input_tokens=..., output_tokens=..., outcome=..., fallback=...)` after each model call.
+
+- **Feature**: the `feature=` argument, else the innermost `ai_feature(...)`, else the
+  innermost `stage()` name, else `unknown`. Feature names follow the stage-name rule; an
+  invalid name in `ai_feature` raises only in strict mode, like `stage()`.
+- **Fallback**: `fallback=True`, or a call inside `ai_fallback()`, or (litellm)
+  `metadata={"hmcts_ai_fallback": True}`, or a litellm **Router** fallback
+  (`attempted_fallbacks` > 0 in the call's metadata). litellm's SDK-level
+  `completion(fallbacks=[...])` does not tell callbacks that a call was a fallback, so
+  mark those with `ai_fallback()`.
+- **Failures** (litellm): outcome `error`, 0 tokens unless the provider reported usage,
+  and the exception class on `hmcts.ai.requests`. Never the message.
+- **Validation**: providers and models must match `[A-Za-z0-9._:/@-]{1,128}` and no
+  redaction rule, else they are recorded as `unknown`. Negative or non-numeric token
+  counts and seconds are not recorded. Both are counted on `hmcts.telemetry.errors`
+  (`invalid.ai_usage.*`). These functions and the litellm callback never raise, even in
+  strict mode. litellm provider IDs are mapped to semantic-convention values (`azure` to
+  `azure.ai.openai`, `vertex_ai` to `gcp.vertex_ai`, `gemini` to `gcp.gemini`).
+- **Content**: the litellm callback reads only the provider, model, call type, two
+  metadata flags, the exception class and the response's `usage` and `model`, never
+  `messages` or `choices`. `setup_telemetry` defaults
+  `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` and
+  `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED` to `false` (an explicit `true` is kept,
+  with a warning), and prompt/response attributes written by any GenAI instrumentation
+  (`gen_ai.prompt.*`, `gen_ai.completion.*`, `gen_ai.input.messages`, ...) are dropped from
+  exported spans and log records. GenAI events (span events and log records named
+  `gen_ai.*`, such as `gen_ai.user.message` and `gen_ai.choice`) keep only non-content
+  attributes (provider, operation, models, `index`, finish reasons, token usage) and lose
+  their body. Log records emitted directly through the OpenTelemetry Logs API are redacted
+  like logging records. Other litellm callbacks (e.g. Langfuse) are not changed and send what
+  they are configured to send.
+
+```kusto
+// Tokens by model and feature (last 30 days)
+customMetrics
+| where name == "gen_ai.client.token.usage" and timestamp > ago(30d)
+| extend provider = tostring(customDimensions["gen_ai.provider.name"]),
+         model = coalesce(tostring(customDimensions["gen_ai.response.model"]), tostring(customDimensions["gen_ai.request.model"])),
+         feature = tostring(customDimensions["hmcts.ai.feature"]),
+         token_type = tostring(customDimensions["gen_ai.token.type"])
+| summarize tokens = sum(valueSum), calls = sum(valueCount) by provider, model, feature, token_type
+| order by tokens desc
+
+// Share of each model's input and output tokens per feature, to split that model's bill
+// (input and output tokens are billed at different rates, so allocate per token type)
+let usage = customMetrics
+| where name == "gen_ai.client.token.usage" and timestamp between (datetime(2026-09-01) .. datetime(2026-10-01))
+| extend model = tostring(customDimensions["gen_ai.request.model"]), token_type = tostring(customDimensions["gen_ai.token.type"]),
+         feature = tostring(customDimensions["hmcts.ai.feature"])
+| summarize tokens = sum(valueSum) by model, token_type, feature;
+usage
+| join kind=inner (usage | summarize total = sum(tokens) by model, token_type) on model, token_type
+| project model, token_type, feature, tokens, share_pct = round(100.0 * tokens / total, 2)
+
+// Audio hours by mode and feature
+customMetrics
+| where name == "hmcts.speech.audio.duration" and timestamp > ago(30d)
+| extend mode = tostring(customDimensions["hmcts.speech.mode"]), feature = tostring(customDimensions["hmcts.ai.feature"])
+| summarize hours = sum(valueSum) / 3600.0 by mode, feature
+
+// Fallback and error rate by feature
+customMetrics
+| where name == "hmcts.ai.requests" and timestamp > ago(7d)
+| extend feature = tostring(customDimensions["hmcts.ai.feature"]),
+         fallback = tostring(customDimensions["hmcts.ai.fallback"]) =~ "true",
+         failed = tostring(customDimensions["hmcts.outcome"]) == "error"
+| summarize calls = sum(valueSum), fallbacks = sumif(valueSum, fallback), errors = sumif(valueSum, failed) by feature
+| extend fallback_pct = round(100.0 * fallbacks / calls, 1), error_pct = round(100.0 * errors / calls, 1)
+```
+
 ## Browser telemetry relay
 
 Browser events go through a same-origin endpoint into the backend, then to App
@@ -246,6 +355,7 @@ app.include_router(
         dependencies=[Depends(get_current_user)],  # your auth
         identity=lambda request: request.state.user_id,  # rate-limit key
         analytics_consent=lambda request: request.cookies.get("cookie_policy_analytics") == "yes",
+        journey_types={"dictation.session"},  # journeys the browser owns
     )
 )
 ```
@@ -259,6 +369,15 @@ POST /api/telemetry
 ```
 
 - Only events registered with `browser=True` are accepted. Unknown attributes are dropped.
+- A browser event carries only the attributes its registration lists. Event metadata
+  (journey, `hmcts.event.source`, `hmcts.event.class`, `hmcts.duration_ms`, and
+  `hmcts.request.id` unless listed) is set by the server and never taken from attributes.
+- Journeys are denied by default: an event carrying a journey is rejected unless its type
+  is in `journey_types`. List only journeys the browser owns (its own session), never a
+  server-side one: journey IDs come from the client.
+- Browser journey `id` (and `parent_id`) must be a UUID or 32 hex characters; anything
+  else rejects the event. A browser's `parent_id` is dropped unless
+  `allow_parent_id=True`.
 - **Operational** events are accepted regardless of analytics consent.
   **Analytics** events need `analytics_consent` to return true.
 - `Content-Type: application/json` only (415 otherwise), so cross-site forms cannot post events with the user's cookies.
@@ -341,7 +460,8 @@ def test_submission_emits_no_content(client):
 ```
 
 `TelemetryCapture` gives you `finished_spans()`, `log_records()`, `events(name)`,
-`metric_points(name)` and `all_exported_text()`.
+`metric_points(name)` (counter `value`; histogram `count`, `sum`, `min`, `max`,
+`bucket_counts`, `explicit_bounds`) and `all_exported_text()`.
 
 ## Configuration
 
@@ -361,6 +481,8 @@ def test_submission_emits_no_content(client):
 | `HMCTS_OTEL_STRICT` | `false` | Raise on telemetry misuse. `capture_telemetry` turns it on |
 | `HMCTS_OTEL_ALLOW_FOREIGN_TRACER_PROVIDER` | `false` | Start (with an error log) even if another tracer provider is registered |
 | `HMCTS_OTEL_ENABLE_LIVE_METRICS` | `false` | App Insights Live Metrics |
+| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | set to `false` by setup if unset | GenAI instrumentation content capture. Leave off |
+| `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED` | set to `false` by setup if unset | Azure AI SDK content recording. Leave off |
 | `SENTRY_DSN` | — | Enables Sentry (with `sentry` extra) |
 | `SENTRY_ENVIRONMENT` | environment | Sentry environment |
 | `HMCTS_OTEL_SENTRY_TRACES_SAMPLE_RATE` | `0.0` | Sentry tracing |
@@ -407,6 +529,9 @@ All of this assumes App Insights ingestion sampling (`sampling_percentage`) is 1
   never by value. With `HMCTS_OTEL_STRICT=true` they raise instead. The one
   deliberate exception: another tracer provider already being registered stops
   setup, because its spans would bypass scrubbing.
+- **litellm's own log lines** (the `LiteLLM` loggers) go through the package's redaction
+  like any other log, which is pattern-based. Do not run litellm at DEBUG level in
+  production: it logs requests.
 - **`stage()` inside a sync generator** (e.g. a `StreamingResponse` body) works, but the
   span stays current between `yield`s and OpenTelemetry may log "Failed to detach
   context" when the generator is resumed in another context. Prefer instrumenting the

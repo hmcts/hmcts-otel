@@ -31,7 +31,7 @@ from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 
 from hmcts_otel import _span_exceptions, _state
 from hmcts_otel._logging import StdoutHandler, add_filters, configure_logging, make_filters, remove_handlers
-from hmcts_otel._scrubbing import ScrubbingSpanExporter
+from hmcts_otel._scrubbing import ScrubbingLogRecordProcessor, ScrubbingSpanExporter
 from hmcts_otel._state import LOCK, STATE
 from hmcts_otel.context import JourneySpanProcessor
 from hmcts_otel.redaction import Redactor, default_redactor
@@ -75,6 +75,12 @@ def _credential(settings: TelemetrySettings) -> Any:
 
 def _scrubbing(exporter: SpanExporter, settings: TelemetrySettings, redactor: Redactor) -> ScrubbingSpanExporter:
     return ScrubbingSpanExporter(exporter, redactor, include_exception_messages=settings.capture_exception_messages)
+
+
+def _log_scrubbing(settings: TelemetrySettings, redactor: Redactor) -> ScrubbingLogRecordProcessor:
+    """Scrubs every log record, including those emitted through the OpenTelemetry Logs API
+    (which bypass the logging filters). Must come before any exporting processor."""
+    return ScrubbingLogRecordProcessor(redactor, include_exception_messages=settings.capture_exception_messages)
 
 
 def _check_tracer_provider(settings: TelemetrySettings) -> None:
@@ -122,10 +128,39 @@ def _metric_views() -> list[Any]:
     from hmcts_otel import conventions as c
 
     buckets = ExplicitBucketHistogramAggregation(boundaries=list(c.DURATION_BUCKETS_S))
+    token_buckets = ExplicitBucketHistogramAggregation(boundaries=[float(b) for b in c.GEN_AI_TOKEN_BUCKETS])
     return [
         View(instrument_name=c.METRIC_STAGE_DURATION, aggregation=buckets),
         View(instrument_name=c.METRIC_EVENT_DURATION, aggregation=buckets),
+        View(instrument_name=c.METRIC_GEN_AI_TOKEN_USAGE, aggregation=token_buckets),
     ]
+
+
+# Variables that switch prompt/response content capture on in GenAI instrumentation:
+# the OpenTelemetry GenAI instrumentations (openai-v2, google-genai, vertexai, ...)
+# and the Azure AI SDKs' tracing. All default to off; setup makes that explicit, so
+# instrumentation added later by a service, or by a dependency, starts without content.
+GENAI_CONTENT_CAPTURE_VARIABLES = (
+    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
+    "AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED",
+)
+_CONTENT_OFF = frozenset({"", "false", "0", "no_content"})
+
+
+def _genai_content_defaults() -> None:
+    """Default GenAI content capture to off. An explicit opt-in is kept, with a warning
+    (content attributes are still removed from exported spans)."""
+    try:
+        for name in GENAI_CONTENT_CAPTURE_VARIABLES:
+            value = os.environ.get(name)
+            if value is None:
+                os.environ[name] = "false"
+            elif value.strip().lower() not in _CONTENT_OFF:
+                _log.warning(
+                    "hmcts_otel: %s is enabled; GenAI instrumentation may capture prompt and response content", name
+                )
+    except Exception:  # pragma: no cover - os.environ does not fail in practice
+        pass
 
 
 def _setup_azure(
@@ -179,6 +214,8 @@ def _setup_azure(
             enable_live_metrics=settings.enable_live_metrics,
             metric_readers=list(metric_readers),
             views=_metric_views(),
+            # Added before the distro's exporting processor.
+            log_record_processors=[_log_scrubbing(settings, redactor)],
         )
     # The distro attaches its OpenTelemetry log handler to the root logger.
     filters = make_filters(redactor, settings)
@@ -234,6 +271,7 @@ def _setup_custom(
 
     logger_provider = LoggerProvider(resource=resource, shutdown_on_exit=False)
     if log_exporter is not None:
+        logger_provider.add_log_record_processor(_log_scrubbing(settings, redactor))  # first: scrubs in place
         logger_provider.add_log_record_processor(SimpleLogRecordProcessor(log_exporter))
         handler = _otel_logging_handler(logger_provider)
         add_filters(handler, make_filters(redactor, settings))
@@ -288,6 +326,7 @@ def setup_telemetry(
             _check_tracer_provider(settings)
         STATE.settings = settings
         STATE.redactor = redactor
+        _genai_content_defaults()
         _span_exceptions.install()
         STATE.handlers = configure_logging(settings, redactor)
         if invalid_fields:

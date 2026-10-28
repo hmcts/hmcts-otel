@@ -26,7 +26,7 @@ from opentelemetry.trace import Span, Status, StatusCode
 from hmcts_otel import _guard, _state
 from hmcts_otel import conventions as c
 from hmcts_otel._exceptions import exception_attributes
-from hmcts_otel.context import current_journey
+from hmcts_otel.context import _restore, _stage, current_journey
 from hmcts_otel.conventions import Outcome
 from hmcts_otel.events import record_event, report_dropped
 from hmcts_otel.propagation import links_from
@@ -171,6 +171,9 @@ def stage(
         _guard.internal_error("stage_span_start", exc)
 
     handle = StageHandle(stage_name, span, schema, dict(clean))
+    # The innermost stage, e.g. the default feature for AI usage inside the block.
+    previous_stage = _stage.get()
+    stage_token = _stage.set(stage_name)
     try:
         if emit_started:
             record_event(f"{stage_name}.started", {c.STAGE: stage_name, **clean}, schema=schema)
@@ -198,6 +201,7 @@ def stage(
         else:
             _finish_safely(handle, span, time.perf_counter() - start, None, business_error=False)
     finally:
+        _restore(_stage, stage_token, previous_stage)
         if span_cm is not None:
             try:
                 span_cm.__exit__(None, None, None)
@@ -239,15 +243,15 @@ def _finish(handle: StageHandle, span: Span, duration_s: float, exc: BaseExcepti
     _duration_histogram().record(
         duration_s,
         {
-            c.STAGE: handle.name,
+            c.STAGE: _guard.safe_dimension(handle.name),
             c.OUTCOME: handle.outcome.value,
-            c.ERROR_CODE: handle.error_code or "none",
-            c.JOURNEY_TYPE: current.type if current is not None else "none",
+            c.ERROR_CODE: _guard.safe_dimension(handle.error_code) if handle.error_code else "none",
+            c.JOURNEY_TYPE: _guard.safe_dimension(current.type) if current is not None else "none",
         },
     )
     record_event(
         f"{handle.name}.{_VERB[handle.outcome]}",
-        {c.STAGE: handle.name, **outcome_attrs, **handle.attributes},
+        {**handle.attributes, c.STAGE: handle.name, **outcome_attrs},
         duration_ms=duration_s * 1000.0,
         schema=handle._schema,
     )

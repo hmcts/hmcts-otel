@@ -147,9 +147,19 @@ removed at any depth.
   longer prefix, so a secret straddling the cut is still matched. Before this change,
   logging a 100k-character token blocked the caller for over 5 seconds, and
   `path_query` was also quadratic.
+  Quoted secret values are matched to their closing quote within the same bound, so a
+  value with spaces or delimiters is redacted whole.
+  A secret value longer than its bound (4,096 characters quoted, 256 braced or in a
+  connection string) fails closed: it is redacted to its closing quote or brace if one
+  follows on the same line, otherwise to the end of the line (a connection-string value
+  to the next `;`). Before, the part past the bound was exported. These paths are
+  reached only after a key and never fail, so a match scans at most to the end of its
+  line and redaction stays linear. The cost is that the rest of a line is occasionally
+  over-redacted. Spaces after the separator (`Password= two words`) are kept and the
+  value is still redacted whole.
 - **The logging filter fails closed.** Handler filters run outside logging's own
   error handling, so the filter catches everything and replaces the record's content
-  with a placeholder. Exception chains are formatted iteratively and capped at 25.
+  with a placeholder and removes every extra attribute. Exception chains are formatted iteratively and capped at 25.
 - **Setup degrades instead of crashing.** Invalid settings fall back to defaults
   (`load_settings`). An exporter or Sentry failure rolls back exporter handlers and
   leaves stdout logging. A tracer provider registered by an earlier attempt in the same
@@ -163,7 +173,10 @@ removed at any depth.
 - **Status descriptions** keep only `Type: [REDACTED]` or a controlled code.
 - **Route templates** replace concrete paths, and link attributes are scrubbed.
 - **Request IDs** must be UUID or hex.
-- **Dropped keys** that are not attribute-like are logged as a hash.
+- **Dropped keys** that are not attribute-like are logged as a hash. Keys from a browser
+  (relay events) are logged as written only if they are registered schema or metadata
+  keys; any other key is hashed, because an attribute-like key such as
+  `fictional_jane_smith` can still be personal data.
 - **The OTel logging handler** comes from opentelemetry-instrumentation-logging (the
   SDK's is deprecated from 1.40).
 - **The shutdown budget** covers the Sentry flush.
@@ -225,6 +238,86 @@ API. `OTEL_TRACES_EXPORTER=none` is set only for the duration of the call, and r
 
 A truncated string still carries part of its content. Over-long or non-conforming
 values are dropped and counted.
+
+## 20. AI usage is metered, not priced
+
+**Decision (OBS-5).** Model and speech usage are recorded as metrics only: tokens per
+call (`gen_ai.client.token.usage`, GenAI semantic conventions v1.37.0, pinned in
+`conventions.GEN_AI_SEMCONV_VERSION`), calls (`hmcts.ai.requests`) and audio seconds
+(`hmcts.speech.audio.duration`), by provider, model, feature, outcome and fallback.
+
+**Why.** Cost is taken from the Azure and GCP bills and allocated by each feature's share
+of usage at query time. A price table in the library would be wrong as soon as prices,
+discounts or commitments changed, and would need a release to fix. Metrics are
+pre-aggregated and never sampled, so totals are complete. A separate requests counter
+gives call counts, error types and the fallback rate without dividing token points.
+
+**Content.** The litellm callback reads only an allowlist of fields (a test fails if it
+reads anything else, `messages` and `choices` included). Setup defaults the GenAI
+content-capture variables to off, and the span exporter drops prompt and response
+attributes written by any GenAI instrumentation, because content cannot be made safe by
+pattern-based redaction.
+
+**Never raises, even in strict mode.** Provider and model names and token counts come from
+provider responses, which the caller cannot fix, so bad values are replaced or skipped
+and counted on `hmcts.telemetry.errors`, never raised. `ai_feature()` names come from
+code and follow `stage()`: invalid names raise in strict mode.
+
+**Fallback detection.** Explicit (`ai_fallback()`, `fallback=True`,
+`metadata={"hmcts_ai_fallback": True}`) or a litellm Router fallback (`attempted_fallbacks`
+in the call's metadata). litellm's SDK-level `fallbacks=` gives callbacks no signal.
+
+**No `genai` extra.** litellm is large and fast-moving; services choose its version.
+`instrument_litellm()` imports it lazily and returns False if it is missing.
+
+## 21. Event metadata is authoritative
+
+Every event's journey, source, class, duration and name are set by hmcts-otel, after
+the caller's attributes, and a caller attribute with one of those keys is dropped and
+counted (reason `reserved`). Otherwise a browser could post
+`{"hmcts.journey.id": <another user's job>, "hmcts.event.source": "server"}` and its
+event would be filed as a server event in that journey, whatever `journey_types` says.
+The request ID comes from the request unless the event registers `hmcts.request.id`
+itself (a browser "error report copied" event names the failed request).
+
+Server code may set `hmcts.outcome` and `hmcts.error.code` on any event. A browser may
+set only what the event's registration lists, core keys included.
+
+## 22. Every log record is scrubbed before export
+
+**Decision (OBS-5).** `setup_telemetry` installs `ScrubbingLogRecordProcessor` as the first
+processor on the package's LoggerProvider: on the Azure path through the distro's
+`log_record_processors` argument (added before its exporting processor), on the custom
+path before the exporter's processor. It changes each record in place: the body and
+attribute values are redacted (nested maps and lists too; bytes and other objects are
+replaced by a placeholder), GenAI content attributes are dropped, and exception text the
+package did not format is reduced to `Type: [REDACTED]`, as in the span exporter.
+
+**Why.** The logging filters (§4) only see records that pass through a `logging.Handler`.
+Records emitted directly through the OpenTelemetry Logs API skip them. GenAI
+instrumentation does this when content capture is on (openai-v2 events, litellm's "otel"
+callback): a `gen_ai.user.message` record with `body={"content": ...}` was exported
+verbatim. A processor that runs before the exporting one is the only point every record
+passes through, and `ReadWriteLogRecord` is writable there (SDK 1.40–1.45); wrapping the
+distro's exporter would need its private API.
+
+**GenAI events are allowlisted.** Span events and log records named `gen_ai.*` keep content
+under unprefixed keys (`content`, `message.content`, `tool_calls`) and in the body, so
+prefix-based dropping misses it. They keep only `gen_ai.system`, `gen_ai.provider.name`,
+`gen_ai.operation.name`, the request and response models, `index`, `finish_reason`,
+`gen_ai.response.finish_reasons` and token-usage counts; the body and everything else are
+dropped. The span exporter applies the same allowlist to span events.
+
+**Standard-library records** have already passed `RedactingFilter`. Redaction is
+idempotent, so redacting them again changes nothing. The filter now leaves the
+`hmcts.exception.formatted` marker on records whose exception it formatted, so the
+processor keeps their stack traces; the processor removes the marker before export and
+the JSON stdout formatter never prints it. A stack trace the filter already replaced with
+`[REDACTED]` is left as it is.
+
+**Never raises.** A record that cannot be scrubbed keeps no content (a placeholder body,
+no attributes) and the failure is counted on `hmcts.telemetry.errors`
+(`internal.log_record_scrub`).
 
 ## Known limitations
 

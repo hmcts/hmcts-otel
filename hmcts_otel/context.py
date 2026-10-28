@@ -45,6 +45,8 @@ class Journey:
 
 _journey: ContextVar[Journey | None] = ContextVar("hmcts_otel_journey", default=None)
 _request_id: ContextVar[str | None] = ContextVar("hmcts_otel_request_id", default=None)
+# Name of the innermost ``stage()`` block, set by ``stages.stage``.
+_stage: ContextVar[str | None] = ContextVar("hmcts_otel_stage", default=None)
 
 
 @contextmanager
@@ -65,7 +67,7 @@ def journey(journey_type: str, journey_id: str, *, parent_id: str | None = None)
         _guard.invalid("journey", f"invalid journey: {exc}")
         current = None
     previous = _journey.get()
-    token = _journey.set(current) if current is not None else None
+    token = _journey.set(current)
     try:
         yield current
     finally:
@@ -90,6 +92,11 @@ def _restore(var: ContextVar[Any], token: Token[Any], previous: Any) -> None:
 
 def current_journey() -> Journey | None:
     return _journey.get()
+
+
+def current_stage() -> str | None:
+    """Name of the innermost ``stage()`` block in the current context, or None."""
+    return _stage.get()
 
 
 def get_request_id() -> str | None:
