@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hmcts-otel"
-version = "0.2.2"
+version = "0.2.3"
 description = "Privacy-safe OpenTelemetry setup for HMCTS Python services on Azure"
 readme = "README.md"
 requires-python = ">=3.11"

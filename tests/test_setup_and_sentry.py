@@ -92,7 +92,12 @@ def test_azure_path_wiring(monkeypatch: pytest.MonkeyPatch) -> None:
     assert calls["exporter_kwargs"]["connection_string"].startswith("InstrumentationKey=")
     assert calls["global_tp"] is setup_mod.STATE.tracer_provider
     distro_handler = next(h for h in logging.getLogger().handlers if h.name == "distro-otel-handler")
-    assert {type(f).__name__ for f in distro_handler.filters} == {"ContextFilter", "RedactingFilter"}
+    # It exports, so the export path's own records are kept off it too (no feedback loop).
+    assert {type(f).__name__ for f in distro_handler.filters} == {
+        "ContextFilter",
+        "RedactingFilter",
+        "ExportPathFilter",
+    }
 
 
 def test_sentry_event_scrubbing() -> None:
