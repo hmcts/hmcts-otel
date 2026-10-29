@@ -16,6 +16,7 @@ from typing import Any
 
 from opentelemetry import trace
 
+from hmcts_otel import conventions as c
 from hmcts_otel._exceptions import exception_attributes
 from hmcts_otel.context import context_attributes
 from hmcts_otel.conventions import EXCEPTION_FORMATTED, REDACTED
@@ -29,6 +30,9 @@ _EXCEPTION_KEYS = frozenset({"exception.type", "exception.message", "exception.s
 # Records whose exception attributes this package built. Identity-based, so it cannot
 # be forged through ``extra=`` (which can set any attribute name).
 _FORMATTED_RECORDS: weakref.WeakSet[logging.LogRecord] = weakref.WeakSet()
+# Records whose ``hmcts.area`` ContextFilter set from the context. Identity-based for
+# the same reason: any other ``hmcts.area`` on a record came from the caller.
+_AREA_RECORDS: weakref.WeakSet[logging.LogRecord] = weakref.WeakSet()
 
 _RESERVED = frozenset(vars(logging.LogRecord("x", logging.INFO, "x", 0, "x", None, None)).keys()) | {
     "message",
@@ -139,13 +143,25 @@ class RedactingFilter(logging.Filter):
 
 
 class ContextFilter(logging.Filter):
-    """Adds journey and request attributes. Explicit ``extra`` values win."""
+    """Adds journey, area and request attributes. Explicit ``extra`` values win,
+    except for ``hmcts.area``, which comes from the context only."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         if record.name == EVENTS_LOGGER:
             return True
+        # A caller's value is never compared (its __eq__ could raise or lie): any
+        # hmcts.area this filter did not set is dropped and counted.
+        if c.AREA in record.__dict__ and record not in _AREA_RECORDS:
+            del record.__dict__[c.AREA]
+            from hmcts_otel.events import report_dropped  # events imports this module
+
+            report_dropped([(c.AREA, "reserved")], where="log")
         for key, value in context_attributes().items():
-            record.__dict__.setdefault(key, value)
+            if key == c.AREA:
+                record.__dict__[key] = value
+                _AREA_RECORDS.add(record)
+            else:
+                record.__dict__.setdefault(key, value)
         return True
 
 

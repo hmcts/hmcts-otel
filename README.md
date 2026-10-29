@@ -205,6 +205,35 @@ Rules:
 - Attribute names cannot be Python log-record field names (`filename`, `name`, `module`, ...); use a
   dotted name such as `file.name`.
 
+## Areas
+
+A service that serves more than one product area (for example `dictation` and
+`recording`) marks each entry point with `area()`. Events, stage events, log records
+and spans started inside the block carry `hmcts.area`, so every App Insights table
+can be filtered by area. Metrics do not: their dimensions are explicit.
+
+```python
+from fastapi import APIRouter, Depends
+from hmcts_otel import area
+from hmcts_otel.fastapi import area_dependency
+
+# Every request of the router, for the rest of the request (exception handlers,
+# background tasks and streamed bodies included), and its request span.
+router = APIRouter(dependencies=[Depends(area_dependency("recording"))])
+
+# A worker loop.
+with area("recording"):
+    poll_forever()
+```
+
+- It is metadata: a caller's or a browser's `hmcts.area` attribute is dropped, on
+  events and on log records (`extra=`). Sentry events are tagged with it.
+- Unset means shared code (health checks, authentication, the relay).
+- Set it in an **async** dependency (as `area_dependency` does) or a middleware: a
+  value set in a sync dependency runs in a thread pool and does not reach the
+  endpoint. Work started with `run_in_executor` or a new thread does not inherit it.
+- Names are lower-case snake case (`[a-z][a-z0-9_]{0,31}`).
+
 ## Asynchronous jobs
 
 Store the trace context on the job when it is created, and link to it when the

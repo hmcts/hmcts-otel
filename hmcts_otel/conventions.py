@@ -48,6 +48,10 @@ DURATION_MS = "hmcts.duration_ms"
 # Reference to a record in an external system, e.g. an Azure Speech job ID.
 DEPENDENCY_REF = "hmcts.dependency.ref"
 REQUEST_ID = "hmcts.request.id"
+# Product area of a service that serves more than one (e.g. dictation, recording),
+# set with ``area()`` for everything emitted inside the block. Not a resource
+# attribute: one process can serve several areas.
+AREA = "hmcts.area"
 
 # Log records carrying this attribute are exported to App Insights as custom
 # events (customEvents / AppEvents) rather than traces.

@@ -17,6 +17,8 @@ from hmcts_otel.ai_usage import (
 )
 from hmcts_otel.context import (
     Journey,
+    area,
+    current_area,
     current_journey,
     current_stage,
     get_request_id,
@@ -41,6 +43,7 @@ __all__ = [
     "AttributeSpec",
     "ai_fallback",
     "ai_feature",
+    "area",
     "background_span",
     "EventClass",
     "EventSource",
@@ -58,6 +61,7 @@ __all__ = [
     "client_failure_code",
     "conventions",
     "current_ai_feature",
+    "current_area",
     "current_journey",
     "current_stage",
     "default_redactor",
