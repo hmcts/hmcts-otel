@@ -300,6 +300,39 @@ def test_a_log_record_cannot_carry_a_caller_supplied_area(tel: TelemetryCapture)
     assert _drops(tel, "reserved") == 2
 
 
+def test_a_caller_supplied_area_is_dropped_even_when_it_equals_the_context(tel: TelemetryCapture) -> None:
+    with area("dictation"):
+        log.warning("same value", extra={c.AREA: "dictation"})
+    assert _log_attributes(tel, "same value")[c.AREA] == "dictation"  # from the context
+    assert _drops(tel, "reserved") == 1
+
+
+def test_a_caller_area_is_never_compared(tel: TelemetryCapture) -> None:
+    class Hostile:
+        def __eq__(self, other: object) -> bool:
+            raise RuntimeError("compared")
+
+        def __ne__(self, other: object) -> bool:
+            raise RuntimeError("compared")
+
+        __hash__ = object.__hash__
+
+    with area("dictation"):
+        log.warning("hostile", extra={c.AREA: Hostile()})  # must not raise
+    assert _log_attributes(tel, "hostile")[c.AREA] == "dictation"
+    assert _drops(tel, "reserved") == 1
+
+
+def test_the_context_area_survives_every_handler_pass() -> None:
+    from hmcts_otel._logging import ContextFilter
+
+    record = logging.LogRecord("app", logging.WARNING, __file__, 1, "two handlers", None, None)
+    with area("recording"):
+        assert ContextFilter().filter(record)
+        assert ContextFilter().filter(record)  # a second handler sees the stamped value
+    assert record.__dict__[c.AREA] == "recording"
+
+
 def test_sentry_events_are_tagged_with_it() -> None:
     from hmcts_otel.sentry import _tag_with_context
 
