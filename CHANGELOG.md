@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [0.3.0] - unreleased
+## [0.3.0] - 2026-10-29
 
 ### Added
 - **`hmcts.area`: the product area of a service that serves more than one.**
@@ -21,7 +21,7 @@ All notable changes to this project are documented here. The format follows
   Needed by transcribe-api, where one process serves dictation and recording
   (DIAAT-205).
 
-## [0.2.3] - unreleased
+## [0.2.3] - 2026-10-28
 
 ### Fixed
 - **The export path's own log records are no longer exported.** The Azure Monitor
