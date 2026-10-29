@@ -142,7 +142,7 @@ def area_dependency(name: str) -> Callable[[], Awaitable[None]]:
     # Async with nothing to await, deliberately: FastAPI runs a sync dependency in a
     # thread pool, in a copy of the request's context, so the area would never reach
     # the endpoint (test_area.py turns red if this becomes sync).
-    async def in_area() -> None:
+    async def in_area() -> None:  # NOSONAR(S7503)
         current = _set_area_for_context(name)
         if current is None:
             return
