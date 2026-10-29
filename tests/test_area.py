@@ -168,7 +168,8 @@ def test_journey_and_area_are_independent(tel: TelemetryCapture) -> None:
     with area("recording"), journey("recording.job", journey_id):
         record_event("job.submitted")
     event = tel.events("job.submitted")[0]
-    assert event[c.AREA] == "recording" and event[c.JOURNEY_ID] == journey_id
+    assert event[c.AREA] == "recording"
+    assert event[c.JOURNEY_ID] == journey_id
 
 
 def _recording_app() -> FastAPI:
@@ -239,7 +240,8 @@ def test_area_dependency_covers_the_endpoint_and_the_request_span(tel: Telemetry
     assert tel.events("sync_jobs.listed")[0][c.AREA] == "recording"
     assert c.AREA not in tel.events("settings.read")[0]
     spans = _server_spans(tel)
-    assert spans["/jobs"] == spans["/sync-jobs"] == "recording"
+    assert spans["/jobs"] == "recording"
+    assert spans["/sync-jobs"] == "recording"
     assert spans["/settings"] is None
 
 
@@ -266,8 +268,9 @@ def test_area_dependency_with_a_malformed_name_is_misuse_when_a_request_runs(tel
 
     app = FastAPI()
     app.include_router(router)
+    client = TestClient(app)
     with pytest.raises(ValueError):
-        TestClient(app).get("/jobs")
+        client.get("/jobs")
 
 
 def test_area_dependency_with_a_malformed_name_without_strict_mode(lenient: TelemetryCapture) -> None:
