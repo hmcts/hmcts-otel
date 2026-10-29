@@ -49,6 +49,7 @@ current stage, then `unknown`.
 |---|---|---|---|
 | `hmcts.ai.fallback` | bool | — | Whether an AI call was a fallback to another model. |
 | `hmcts.ai.feature` | str | matches `[a-z][a-z0-9_.]{0,63}` | Product feature an AI call served, e.g. summarise. Defaults to the current stage. |
+| `hmcts.area` | str | matches `[a-z][a-z0-9_]{0,31}` | Product area the signal belongs to, e.g. dictation or recording (set with area()). |
 | `hmcts.dependency.ref` | str | matches `[A-Za-z0-9_.:-]{1,128}` | Reference in an external system, e.g. Azure Speech job ID. |
 | `hmcts.duration_ms` | float | — | Duration in milliseconds. |
 | `hmcts.error.code` | str | matches `[A-Za-z0-9_.:-]{1,64}` | Controlled error code. Never a message. |

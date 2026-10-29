@@ -17,7 +17,7 @@ from collections.abc import Container, Iterable, Mapping
 from hmcts_otel import _guard, _state
 from hmcts_otel import conventions as c
 from hmcts_otel._logging import EVENTS_LOGGER
-from hmcts_otel.context import Journey, current_journey, get_request_id
+from hmcts_otel.context import Journey, current_area, current_journey, get_request_id
 from hmcts_otel.conventions import EventClass, EventSource
 from hmcts_otel.schema import METADATA_KEYS, TelemetrySchema, check_name, default_schema
 
@@ -143,6 +143,9 @@ def _record(
     current = journey or current_journey()
     if current is not None:
         extra.update(current.attributes())
+    current_area_name = current_area()
+    if current_area_name is not None:
+        extra[c.AREA] = current_area_name
     rid = get_request_id()
     if rid is not None and c.REQUEST_ID not in clean:
         extra[c.REQUEST_ID] = rid

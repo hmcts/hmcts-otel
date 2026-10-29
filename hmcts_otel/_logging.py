@@ -16,8 +16,9 @@ from typing import Any
 
 from opentelemetry import trace
 
+from hmcts_otel import conventions as c
 from hmcts_otel._exceptions import exception_attributes
-from hmcts_otel.context import context_attributes
+from hmcts_otel.context import context_attributes, current_area
 from hmcts_otel.conventions import EXCEPTION_FORMATTED, REDACTED
 from hmcts_otel.redaction import REDACTED as _REDACTED_VALUE
 from hmcts_otel.redaction import Redactor, is_secret_key
@@ -139,11 +140,17 @@ class RedactingFilter(logging.Filter):
 
 
 class ContextFilter(logging.Filter):
-    """Adds journey and request attributes. Explicit ``extra`` values win."""
+    """Adds journey, area and request attributes. Explicit ``extra`` values win,
+    except for ``hmcts.area``, which comes from the context only."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         if record.name == EVENTS_LOGGER:
             return True
+        if c.AREA in record.__dict__ and record.__dict__[c.AREA] != current_area():
+            del record.__dict__[c.AREA]
+            from hmcts_otel.events import report_dropped  # events imports this module
+
+            report_dropped([(c.AREA, "reserved")], where="log")
         for key, value in context_attributes().items():
             record.__dict__.setdefault(key, value)
         return True

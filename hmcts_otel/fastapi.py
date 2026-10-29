@@ -14,7 +14,7 @@ import logging
 import threading
 import time
 import uuid
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Awaitable, Callable, Collection, Sequence
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, Request
@@ -28,7 +28,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from hmcts_otel import _guard, _state
 from hmcts_otel import conventions as c
 from hmcts_otel._logging import capture_uvicorn_loggers, uvicorn_needs_capture
-from hmcts_otel.context import Journey, is_valid_request_id, request_id_context
+from hmcts_otel.context import Journey, _set_area_for_context, is_valid_request_id, request_id_context
 from hmcts_otel.conventions import EventClass, EventSource
 from hmcts_otel.events import record_event
 from hmcts_otel.schema import TelemetrySchema, default_schema
@@ -123,6 +123,32 @@ def request_id_for(request: Request) -> str | None:
 
     state_id = getattr(request.state, "request_id", None)
     return state_id if isinstance(state_id, str) else get_request_id()
+
+
+def area_dependency(name: str) -> Callable[[], Awaitable[None]]:
+    """A router dependency that puts every request of the router in a product area.
+
+    ``APIRouter(dependencies=[Depends(area_dependency("recording"))])``: events, stage
+    events, log records and spans of the request carry ``hmcts.area`` (see
+    ``area()``). The area is set for the rest of the request, which runs in its own
+    context: exception handlers, background tasks and streamed bodies included. The
+    current span when the dependency runs (the request's span, unless another span
+    is current) is stamped too, since it started before dependencies ran. Async on
+    purpose: an area set in a sync dependency runs in a thread pool and would not
+    reach the endpoint. An invalid name is misuse, reported when a request runs
+    (raised in strict mode, otherwise counted, and the request gets no area).
+    """
+
+    async def in_area() -> None:
+        current = _set_area_for_context(name)
+        if current is None:
+            return
+        try:
+            trace.get_current_span().set_attribute(c.AREA, current)
+        except Exception as exc:  # telemetry never fails the request
+            _guard.internal_error("area_dependency", exc)
+
+    return in_area
 
 
 def instrument_fastapi(app: FastAPI, settings: TelemetrySettings | None = None, *, request_id: bool = True) -> None:

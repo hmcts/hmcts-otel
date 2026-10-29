@@ -33,6 +33,7 @@ _ID_PATTERN = r"[A-Za-z0-9_-]{1,64}"
 _CODE_PATTERN = r"[A-Za-z0-9_.:-]{1,64}"
 _SLUG_PATTERN = r"[a-z0-9][a-z0-9_.-]{0,63}"
 _STAGE_PATTERN = r"[a-z][a-z0-9_.]{0,63}"
+_AREA_PATTERN = r"[a-z][a-z0-9_]{0,31}"
 
 
 @dataclass(frozen=True)
@@ -87,8 +88,8 @@ class EventSpec:
 
 _JOURNEY_KEYS = (c.JOURNEY_TYPE, c.JOURNEY_ID, c.JOURNEY_PARENT_ID)
 
-# Event metadata hmcts-otel sets itself, from the call, the journey context and the
-# request: never taken from caller-supplied attributes, on any path. A caller (or a
+# Event metadata hmcts-otel sets itself, from the call, the journey and area context
+# and the request: never taken from caller-supplied attributes, on any path. A caller (or a
 # browser via the relay) passing one has it dropped and counted (reason "reserved").
 # The request ID is reserved too, except on an event whose registration lists it
 # explicitly (e.g. a browser "error report copied" event naming the failed request).
@@ -98,6 +99,7 @@ METADATA_KEYS: frozenset[str] = frozenset(
         c.JOURNEY_TYPE,
         c.JOURNEY_ID,
         c.JOURNEY_PARENT_ID,
+        c.AREA,
         c.EVENT_SOURCE,
         c.EVENT_CLASS,
         c.DURATION_MS,
@@ -113,6 +115,11 @@ def _core_attributes() -> list[AttributeSpec]:
         AttributeSpec(c.JOURNEY_ID, description="Pseudonymous journey identifier (UUID).", pattern=_ID_PATTERN),
         AttributeSpec(
             c.JOURNEY_PARENT_ID, description="Parent journey, e.g. the batch a file belongs to.", pattern=_ID_PATTERN
+        ),
+        AttributeSpec(
+            c.AREA,
+            description="Product area the signal belongs to, e.g. dictation or recording (set with area()).",
+            pattern=_AREA_PATTERN,
         ),
         AttributeSpec(c.STAGE, description="Stage name.", pattern=_STAGE_PATTERN),
         AttributeSpec(

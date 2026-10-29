@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - unreleased
+
+### Added
+- **`hmcts.area`: the product area of a service that serves more than one.**
+  `area("recording")` (a context manager, like `journey()`) stamps `hmcts.area` on
+  custom events, stage events, log records and spans started inside the block.
+  Metrics are not stamped: their dimensions are explicit. It is metadata, so a
+  caller's or a browser's `hmcts.area` attribute is dropped (reason "reserved"),
+  from events and from log records' `extra`. Sentry events are tagged with it.
+  `hmcts_otel.fastapi.area_dependency(name)` is an async router dependency that
+  sets it for the rest of each request of a router (exception handlers, background
+  tasks and streamed bodies included) and stamps the request span, which starts
+  before dependencies run. `current_area()` returns it. An invalid name is misuse:
+  raised in strict mode, otherwise counted, and the area in force is unchanged.
+  Needed by transcribe-api, where one process serves dictation and recording
+  (DIAAT-205).
+
 ## [0.2.3] - unreleased
 
 ### Fixed

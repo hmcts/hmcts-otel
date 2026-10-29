@@ -9,8 +9,8 @@ alerting live in OpenTelemetry / App Insights / Dynatrace. Defaults:
 * every string in error events, transactions and breadcrumbs passes through the
   redactor, and query-string fields (``http.query`` and similar) are removed;
 * request data reduced to method and path (query string removed);
-* events tagged with the OpenTelemetry trace ID and journey, so Sentry issues can
-  be joined to App Insights.
+* events tagged with the OpenTelemetry trace ID, journey, area and request ID, so
+  Sentry issues can be joined to App Insights.
 """
 
 from __future__ import annotations
@@ -78,7 +78,7 @@ def _tag_with_context(event: dict[str, Any]) -> None:
     if span_context.is_valid:
         tags["trace_id"] = format(span_context.trace_id, "032x")
     for key, value in context_attributes().items():
-        if key in (c.JOURNEY_TYPE, c.JOURNEY_ID, c.REQUEST_ID):
+        if key in (c.JOURNEY_TYPE, c.JOURNEY_ID, c.AREA, c.REQUEST_ID):
             tags[key] = value
 
 

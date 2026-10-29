@@ -1,4 +1,4 @@
-"""Journey and request context carried on every span, log record and event."""
+"""Journey, area and request context carried on every span, log record and event."""
 
 from __future__ import annotations
 
@@ -47,6 +47,7 @@ _journey: ContextVar[Journey | None] = ContextVar("hmcts_otel_journey", default=
 _request_id: ContextVar[str | None] = ContextVar("hmcts_otel_request_id", default=None)
 # Name of the innermost ``stage()`` block, set by ``stages.stage``.
 _stage: ContextVar[str | None] = ContextVar("hmcts_otel_stage", default=None)
+_area: ContextVar[str | None] = ContextVar("hmcts_otel_area", default=None)
 
 
 @contextmanager
@@ -73,6 +74,67 @@ def journey(journey_type: str, journey_id: str, *, parent_id: str | None = None)
     finally:
         if token is not None:
             _restore(_journey, token, previous)
+
+
+@contextmanager
+def area(name: str) -> Iterator[str | None]:
+    """Mark everything emitted inside the block as belonging to a product area.
+
+    For a service that serves more than one area (e.g. ``dictation`` and
+    ``recording``): events, stage events, log records and spans started in the block
+    carry ``hmcts.area``. Metrics do not: their dimensions are explicit. It is
+    metadata, so callers and the browser relay cannot set it as an attribute.
+
+    Works across ``await`` boundaries, like ``journey()``. Set it where a request or
+    a worker loop enters the area (in FastAPI, an **async** router dependency or a
+    middleware: a value set in a sync dependency runs in a thread pool and does not
+    reach the endpoint; ``hmcts_otel.fastapi.area_dependency`` does this). Work
+    started with ``run_in_executor`` or a new thread does not inherit it. The
+    innermost block wins. A malformed name is rejected: in strict mode ``ValueError``
+    is raised; otherwise the misuse is counted and the area in force is unchanged.
+    Yields the area in force inside the block.
+    """
+    checked = _checked_area(name)
+    if checked is None:
+        yield _area.get()
+        return
+    previous = _area.get()
+    token = _area.set(checked)
+    try:
+        yield checked
+    finally:
+        _restore(_area, token, previous)
+
+
+def _checked_area(name: object) -> str | None:
+    """``name`` if it is a valid area, else None after reporting the misuse."""
+    from hmcts_otel import _guard
+
+    try:
+        if not isinstance(name, str):
+            raise ValueError("an area name is a string")
+        return default_schema.check_identifier(c.AREA, name)
+    except ValueError as exc:
+        _guard.invalid("area", f"invalid area: {exc}")
+        return None
+
+
+def _set_area_for_context(name: str) -> str | None:
+    """Set the area for the rest of the current context, with no way back.
+
+    For work that owns its context, such as one request: exception handlers,
+    background tasks and streamed bodies run after the code that set it has
+    returned. Misuse is handled as in ``area()``. Returns the area in force.
+    """
+    checked = _checked_area(name)
+    if checked is not None:
+        _area.set(checked)
+    return _area.get()
+
+
+def current_area() -> str | None:
+    """The ``area()`` of the current context, or None (shared code)."""
+    return _area.get()
 
 
 def _restore(var: ContextVar[Any], token: Token[Any], previous: Any) -> None:
@@ -133,11 +195,14 @@ def request_id_context(request_id: str) -> Iterator[str]:
 
 
 def context_attributes() -> dict[str, str]:
-    """Journey and request attributes for the current context."""
+    """Journey, area and request attributes for the current context."""
     attrs: dict[str, str] = {}
     current = _journey.get()
     if current is not None:
         attrs.update(current.attributes())
+    current_area_name = _area.get()
+    if current_area_name is not None:
+        attrs[c.AREA] = current_area_name
     rid = _request_id.get()
     if rid is not None:
         attrs[c.REQUEST_ID] = rid
@@ -145,7 +210,7 @@ def context_attributes() -> dict[str, str]:
 
 
 class JourneySpanProcessor(SpanProcessor):
-    """Adds journey and request attributes to every span when it starts."""
+    """Adds journey, area and request attributes to every span when it starts."""
 
     def on_start(self, span: Span, parent_context: Context | None = None) -> None:
         attrs = context_attributes()
